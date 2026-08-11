@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://friday-agent.local/schemas/inbound-message.v1.schema.json",
+  "title": "InboundMessageV1",
+  "description": "A normalized owner message received from a supported interaction channel.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "messageId",
+    "channel",
+    "senderId",
+    "conversationId",
+    "authStrength",
+    "receivedAt",
+    "content"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": "1"
+    },
+    "messageId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "channel": {
+      "enum": [
+        "web",
+        "telegram",
+        "wechat_ilink",
+        "voice"
+      ]
+    },
+    "senderId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "conversationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "authStrength": {
+      "enum": [
+        "unverified",
+        "channel",
+        "strong"
+      ]
+    },
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "content": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/textContent"
+        },
+        {
+          "$ref": "#/$defs/voiceContent"
+        },
+        {
+          "$ref": "#/$defs/attachmentsContent"
+        },
+        {
+          "$ref": "#/$defs/mixedContent"
+        }
+      ]
+    },
+    "replyTo": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "$defs": {
+    "attachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attachmentId",
+        "kind",
+        "mimeType",
+        "sizeBytes",
+        "sha256",
+        "uri"
+      ],
+      "properties": {
+        "attachmentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "enum": [
+            "image",
+            "audio",
+            "video",
+            "file"
+          ]
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      }
+    },
+    "attachmentArray": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/attachment"
+      }
+    },
+    "textContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "text"
+      ],
+      "properties": {
+        "kind": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    "voiceContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "attachment"
+      ],
+      "properties": {
+        "kind": {
+          "const": "voice"
+        },
+        "attachment": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/attachment"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "audio"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "attachmentsContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "attachments"
+      ],
+      "properties": {
+        "kind": {
+          "const": "attachments"
+        },
+        "attachments": {
+          "$ref": "#/$defs/attachmentArray"
+        }
+      }
+    },
+    "mixedContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "text",
+        "attachments"
+      ],
+      "properties": {
+        "kind": {
+          "const": "mixed"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "attachments": {
+          "$ref": "#/$defs/attachmentArray"
+        }
+      }
+    }
+  }
+}

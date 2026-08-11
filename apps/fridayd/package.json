@@ -1,0 +1,23 @@
+{
+  "name": "@friday/fridayd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "friday-self-patch": "./dist/self-patch-cli.js",
+    "friday-mcp-broker": "./dist/mcp-broker-sidecar.js"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@friday/protocol": "0.1.0",
+    "@simplewebauthn/server": "13.3.2",
+    "ajv": "8.20.0",
+    "qrcode": "1.5.4"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && node --disable-warning=ExperimentalWarning --enable-source-maps dist/index.js"
+  }
+}

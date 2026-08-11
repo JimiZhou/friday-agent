@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.friday/
+.playwright-cli/
+output/
+*.log
+.DS_Store
+._*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+deploy/hub/.env
+deploy/hub/hub.env
+deploy/gateway/gateway.env

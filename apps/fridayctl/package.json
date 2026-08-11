@@ -1,0 +1,13 @@
+{
+  "name": "@friday/fridayctl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Owner-side Friday fleet administration CLI",
+  "type": "module",
+  "bin": {
+    "fridayctl": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}

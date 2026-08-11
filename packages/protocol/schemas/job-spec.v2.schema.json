@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://friday-agent.local/schemas/job-spec.v2.schema.json",
+  "title": "JobSpecV2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "jobId", "idempotencyKey", "runnerId", "workspaceId", "tool", "operation", "prompt", "risk", "limits", "network", "createdAt", "expiresAt", "leaseId", "leaseExpiresAt", "manifestSha256", "hubSignature"],
+  "properties": {
+    "protocolVersion": { "const": "2" },
+    "jobId": { "type": "string", "format": "uuid" },
+    "idempotencyKey": { "type": "string", "format": "uuid" },
+    "runnerId": { "type": "string", "format": "uuid" },
+    "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "tool": { "enum": ["codex", "pi", "claude", "diagnostic"] },
+    "operation": { "enum": ["develop", "diagnose", "review", "test"] },
+    "prompt": { "type": "string", "minLength": 1, "maxLength": 32768 },
+    "risk": { "enum": ["R0", "R1", "R2", "R3"] },
+    "limits": { "type": "object", "additionalProperties": false, "required": ["timeoutSeconds", "maxOutputBytes", "cpuMillis", "memoryMiB"], "properties": { "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 }, "maxOutputBytes": { "type": "integer", "minimum": 1024, "maximum": 67108864 }, "cpuMillis": { "type": "integer", "minimum": 100, "maximum": 4000 }, "memoryMiB": { "type": "integer", "minimum": 128, "maximum": 8192 } } },
+    "network": { "type": "object", "additionalProperties": false, "required": ["mode", "allowedHosts"], "properties": { "mode": { "const": "none" }, "allowedHosts": { "type": "array", "maxItems": 0 } } },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "leaseId": { "type": "string", "format": "uuid" },
+    "leaseExpiresAt": { "type": "string", "format": "date-time" },
+    "manifestSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "hubSignature": { "type": "string", "pattern": "^[A-Za-z0-9_-]{86}$" }
+  }
+}

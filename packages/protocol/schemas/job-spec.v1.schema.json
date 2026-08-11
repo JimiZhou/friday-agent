@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://friday-agent.local/schemas/job-spec.v1.schema.json",
+  "title": "JobSpecV1",
+  "description": "A bounded, idempotent job manifest dispatched to a registered runner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "jobId",
+    "idempotencyKey",
+    "createdAt",
+    "expiresAt",
+    "runnerId",
+    "workspaceId",
+    "tool",
+    "operation",
+    "approval",
+    "limits",
+    "network",
+    "secrets",
+    "input"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": "1"
+    },
+    "jobId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runnerId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "workspaceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "tool": {
+      "enum": [
+        "codex",
+        "claude_code",
+        "pi",
+        "diagnostic"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "develop",
+        "diagnose",
+        "review",
+        "test",
+        "custom"
+      ]
+    },
+    "approval": {
+      "$ref": "#/$defs/approval"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "network": {
+      "$ref": "#/$defs/network"
+    },
+    "secrets": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-z][a-z0-9_.:/-]*$"
+      }
+    },
+    "input": {
+      "$ref": "#/$defs/input"
+    }
+  },
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "status"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "R0",
+            "R1",
+            "R2",
+            "R3"
+          ]
+        },
+        "status": {
+          "enum": [
+            "not_required",
+            "pending",
+            "approved"
+          ]
+        },
+        "approvedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "approvedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "manifestSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "level": {
+              "const": "R0"
+            },
+            "status": {
+              "const": "not_required"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "properties": {
+                  "approvedBy": {}
+                },
+                "required": [
+                  "approvedBy"
+                ]
+              },
+              {
+                "properties": {
+                  "approvedAt": {}
+                },
+                "required": [
+                  "approvedAt"
+                ]
+              },
+              {
+                "properties": {
+                  "manifestSha256": {}
+                },
+                "required": [
+                  "manifestSha256"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "properties": {
+            "level": {
+              "enum": [
+                "R1",
+                "R2",
+                "R3"
+              ]
+            },
+            "status": {
+              "const": "pending"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "properties": {
+                  "approvedBy": {}
+                },
+                "required": [
+                  "approvedBy"
+                ]
+              },
+              {
+                "properties": {
+                  "approvedAt": {}
+                },
+                "required": [
+                  "approvedAt"
+                ]
+              },
+              {
+                "properties": {
+                  "manifestSha256": {}
+                },
+                "required": [
+                  "manifestSha256"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "approvedBy",
+            "approvedAt",
+            "manifestSha256"
+          ],
+          "properties": {
+            "level": {
+              "enum": [
+                "R1",
+                "R2",
+                "R3"
+              ]
+            },
+            "status": {
+              "const": "approved"
+            },
+            "approvedBy": {},
+            "approvedAt": {},
+            "manifestSha256": {}
+          }
+        }
+      ]
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeoutSeconds",
+        "maxOutputBytes",
+        "maxCostUsd"
+      ],
+      "properties": {
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 1073741824
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100000
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "allowedHosts"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "tailscale",
+            "restricted"
+          ]
+        },
+        "allowedHosts": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[^\\s/]+$"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "none"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "allowedHosts": {
+                "type": "array",
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        },
+        "context": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    }
+  }
+}

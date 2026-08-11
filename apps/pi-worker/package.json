@@ -1,0 +1,24 @@
+{
+  "name": "@friday/pi-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Strict JSONL isolation boundary for Friday's pinned Pi worker",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "bin": {
+    "friday-pi-worker": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && node --enable-source-maps dist/index.js",
+    "start": "node --enable-source-maps dist/index.js"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@friday/protocol": "0.1.0"
+  }
+}

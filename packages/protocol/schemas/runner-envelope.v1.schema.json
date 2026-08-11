@@ -1,0 +1,425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://friday-agent.local/schemas/runner-envelope.v1.schema.json",
+  "title": "RunnerEnvelopeV1",
+  "description": "A registration, liveness, or job event emitted by an outbound runner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocolVersion",
+    "envelopeId",
+    "runnerId",
+    "sentAt",
+    "kind",
+    "payload"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "const": "1"
+    },
+    "envelopeId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "runnerId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sentAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "kind": {
+      "enum": [
+        "register",
+        "heartbeat",
+        "event"
+      ]
+    },
+    "payload": {}
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "register"
+        },
+        "payload": {
+          "$ref": "#/$defs/registerPayload"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "heartbeat"
+        },
+        "payload": {
+          "$ref": "#/$defs/heartbeatPayload"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "event"
+        },
+        "payload": {
+          "$ref": "#/$defs/eventPayload"
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "protocolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "registerPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "displayName",
+        "version",
+        "capabilities",
+        "workspaces",
+        "shellExecution"
+      ],
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "not": {
+            "contains": {
+              "const": "shell"
+            }
+          },
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+          }
+        },
+        "workspaces": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          }
+        },
+        "shellExecution": {
+          "const": false
+        }
+      }
+    },
+    "heartbeatPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "activeJobs"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "online",
+            "degraded"
+          ]
+        },
+        "activeJobs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        }
+      }
+    },
+    "eventPayload": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/stateEvent"
+        },
+        {
+          "$ref": "#/$defs/outputEvent"
+        },
+        {
+          "$ref": "#/$defs/artifactEvent"
+        },
+        {
+          "$ref": "#/$defs/inputRequestEvent"
+        },
+        {
+          "$ref": "#/$defs/errorEvent"
+        }
+      ]
+    },
+    "stateEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "sequence",
+        "event",
+        "state"
+      ],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "const": "state"
+        },
+        "state": {
+          "enum": [
+            "NEW",
+            "PLANNING",
+            "WAIT_APPROVAL",
+            "DISPATCHED",
+            "RUNNING",
+            "WAIT_USER",
+            "UNKNOWN",
+            "RECONCILING",
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED"
+          ]
+        }
+      }
+    },
+    "outputEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "sequence",
+        "event",
+        "stream",
+        "chunk"
+      ],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "const": "output"
+        },
+        "stream": {
+          "enum": [
+            "stdout",
+            "stderr",
+            "log"
+          ]
+        },
+        "chunk": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      }
+    },
+    "artifactEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "sequence",
+        "event",
+        "artifact"
+      ],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "const": "artifact"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "inputRequestEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "sequence",
+        "event",
+        "prompt",
+        "secret"
+      ],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "const": "input_request"
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "secret": {
+          "type": "boolean"
+        }
+      }
+    },
+    "errorEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jobId",
+        "sequence",
+        "event",
+        "error"
+      ],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "const": "error"
+        },
+        "error": {
+          "$ref": "#/$defs/protocolError"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "name",
+        "mediaType",
+        "uri",
+        "sha256",
+        "sizeBytes"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[^/\\s]+/[^/\\s]+$"
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        }
+      }
+    }
+  }
+}

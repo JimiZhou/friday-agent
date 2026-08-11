@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Install release-check tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm audit --audit-level=moderate
+      - run: bash scripts/public-release-check.sh

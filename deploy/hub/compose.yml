@@ -1,0 +1,97 @@
+services:
+  hub:
+    build:
+      context: ../..
+      dockerfile: deploy/hub/Dockerfile
+    image: friday-agent-hub:0.1.0
+    container_name: friday-hub
+    network_mode: host
+    user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"
+    env_file:
+      - ./hub.env
+    environment:
+      FRIDAY_HOST: 127.0.0.1
+      FRIDAY_PORT: "4310"
+      FRIDAY_STATE_DIR: /state
+    volumes:
+      - ${FRIDAY_STATE_DIR:?set FRIDAY_STATE_DIR in deploy/hub/.env}:/state
+      - ${FRIDAY_STATE_DIR:?set FRIDAY_STATE_DIR in deploy/hub/.env}/mcp-broker:/run/friday-mcp-broker
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4310/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+  channel-gateway:
+    image: friday-agent-hub:0.1.0
+    container_name: friday-channel-gateway
+    network_mode: host
+    user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"
+    env_file:
+      - ../gateway/gateway.env
+    environment:
+      FRIDAY_GATEWAY_STATE_DIR: /state
+    volumes:
+      - ${FRIDAY_GATEWAY_STATE_DIR:?set FRIDAY_GATEWAY_STATE_DIR in deploy/hub/.env}:/state
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    depends_on:
+      hub:
+        condition: service_healthy
+    command: ["node", "--enable-source-maps", "apps/channel-gateway/dist/index.js"]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+  mcp-broker:
+    profiles: ["mcp"]
+    image: friday-agent-hub:0.1.0
+    container_name: friday-mcp-broker
+    network_mode: host
+    user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"
+    environment:
+      FRIDAY_MCP_BROKER_SOCKET: /run/friday-mcp-broker/broker.sock
+      FRIDAY_MCP_BROKER_ALLOWED_ORIGINS: "${FRIDAY_MCP_BROKER_ALLOWED_ORIGINS:-}"
+    volumes:
+      - ${FRIDAY_STATE_DIR:?set FRIDAY_STATE_DIR in deploy/hub/.env}/mcp-broker:/run/friday-mcp-broker
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 15s
+    command: ["node", "--disable-warning=ExperimentalWarning", "--enable-source-maps", "apps/fridayd/dist/mcp-broker-sidecar.js"]
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"

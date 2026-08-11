@@ -1,0 +1,15 @@
+{
+  "name": "@friday/sandboxd",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "bin": {
+    "friday-sandboxd": "./dist/index.js",
+    "friday-agent-wrapper": "./dist/agent-wrapper.js"
+  },
+  "files": ["dist"],
+  "scripts": { "build": "tsc -p tsconfig.json", "start": "node --enable-source-maps dist/index.js" },
+  "dependencies": { "@friday/protocol": "0.1.0" }
+}

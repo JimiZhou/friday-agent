@@ -1,0 +1,32 @@
+[Unit]
+Description=Friday Agent channel gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=friday-gateway
+Group=friday-gateway
+WorkingDirectory=/opt/friday-agent
+EnvironmentFile=/etc/friday-channel-gateway/gateway.env
+StateDirectory=friday-channel-gateway
+ReadWritePaths=/var/lib/friday-channel-gateway
+ExecStart=/usr/bin/node --enable-source-maps /opt/friday-agent/apps/channel-gateway/dist/index.js
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

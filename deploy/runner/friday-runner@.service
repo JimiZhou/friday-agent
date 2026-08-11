@@ -1,0 +1,42 @@
+[Unit]
+Description=Friday Agent Runner (%i)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/opt/friday-agent
+EnvironmentFile=/etc/friday-runner/%i.env
+StateDirectory=friday-runner
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/usr/bin/node --enable-source-maps /opt/friday-agent/apps/runner/dist/index.js
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The trusted, operator-managed source allow-list lives here. The Runner needs
+# to update Git's worktree metadata in it; untrusted tools only see the
+# detached copy under /var/lib/friday-runner/jobs.
+ReadWritePaths=/var/lib/friday-runner /srv/friday-workspaces
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

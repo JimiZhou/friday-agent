@@ -1,0 +1,423 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://friday-agent.local/schemas/pi-worker-envelope.v1.schema.json",
+  "title": "PiWorkerEnvelopeV1",
+  "description": "A versioned message exchanged across the isolated Pi worker boundary.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/successResponse"
+    },
+    {
+      "$ref": "#/$defs/errorResponse"
+    },
+    {
+      "$ref": "#/$defs/event"
+    }
+  ],
+  "$defs": {
+    "jsonValue": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    },
+    "protocolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "envelopeId",
+        "sentAt",
+        "kind",
+        "requestId",
+        "operation",
+        "payload"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": "1"
+        },
+        "envelopeId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "const": "request"
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "enum": [
+            "ping",
+            "start",
+            "prompt",
+            "steer",
+            "follow_up",
+            "abort",
+            "get_state",
+            "compact",
+            "close"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "ping",
+                  "start"
+                ]
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "type": "object",
+              "properties": {
+                "sessionId": {}
+              },
+              "required": [
+                "sessionId"
+              ]
+            }
+          },
+          "else": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "sessionId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "ping",
+                  "abort",
+                  "get_state",
+                  "compact",
+                  "close"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "const": "start"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/startPayload"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "enum": [
+                  "prompt",
+                  "steer",
+                  "follow_up"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "#/$defs/textPayload"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "startPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "textPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "images": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/imagePayload"
+          }
+        }
+      }
+    },
+    "imagePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "data",
+        "mimeType"
+      ],
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "data": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 13981016,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+        },
+        "mimeType": {
+          "enum": [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif"
+          ]
+        }
+      }
+    },
+    "successResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "envelopeId",
+        "sentAt",
+        "kind",
+        "requestId",
+        "ok"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": "1"
+        },
+        "envelopeId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ok": {
+          "const": true
+        },
+        "payload": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "envelopeId",
+        "sentAt",
+        "kind",
+        "requestId",
+        "ok",
+        "error"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": "1"
+        },
+        "envelopeId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "const": "response"
+        },
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ok": {
+          "const": false
+        },
+        "error": {
+          "$ref": "#/$defs/protocolError"
+        }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protocolVersion",
+        "envelopeId",
+        "sentAt",
+        "kind",
+        "sequence",
+        "event",
+        "payload"
+      ],
+      "properties": {
+        "protocolVersion": {
+          "const": "1"
+        },
+        "envelopeId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sentAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "const": "event"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "event": {
+          "enum": [
+            "ready",
+            "session_started",
+            "assistant_delta",
+            "tool_started",
+            "tool_finished",
+            "state_changed",
+            "compacted",
+            "closed",
+            "worker_error"
+          ]
+        },
+        "payload": {
+          "$ref": "#/$defs/jsonValue"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "friday-agent",
+  "version": "0.1.0",
+  "description": "Single-owner self-hosted AI agent control plane for private device infrastructure",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JimiZhou/friday-agent.git"
+  },
+  "homepage": "https://github.com/JimiZhou/friday-agent#readme",
+  "bugs": {
+    "url": "https://github.com/JimiZhou/friday-agent/issues"
+  },
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "npm run build -w @friday/protocol && npm run build -w @friday/fridayd && npm run build -w @friday/pi-worker && npm run build -w @friday/sandboxd && npm run build -w @friday/runner && npm run build -w @friday/channel-gateway && npm run build -w @friday/fridayctl",
+    "check": "npm test",
+    "dev:hub": "npm run dev -w @friday/fridayd",
+    "dev:pi-worker": "npm run dev -w @friday/pi-worker",
+    "dev:runner": "npm run dev -w @friday/runner",
+    "fridayctl": "node --enable-source-maps apps/fridayctl/dist/index.js",
+    "pretest": "npm run build",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.mjs",
+    "release:check": "npm test && npm audit --audit-level=moderate && sh -n deploy/hub/install-hub.sh && sh -n deploy/hub/configure-telegram.sh && sh -n deploy/runner/install-managed-runner.sh && sh -n deploy/runner/upgrade-managed-runner.sh && sh -n deploy/sandboxd/install-managed-sandboxd.sh && bash scripts/public-release-check.sh"
+  },
+  "devDependencies": {
+    "@types/qrcode": "1.5.5",
+    "@types/node": "22.15.30",
+    "ajv": "8.20.0",
+    "typescript": "5.9.3"
+  }
+}

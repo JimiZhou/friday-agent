@@ -1,0 +1,23 @@
+{
+  "name": "@friday/runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Outbound-only Friday runner skeleton",
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "exports": "./dist/index.js",
+  "bin": {
+    "friday-runner": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "npm run build && node --enable-source-maps dist/index.js",
+    "start": "node --enable-source-maps dist/index.js"
+  },
+  "dependencies": {
+    "@friday/protocol": "0.1.0"
+  }
+}
