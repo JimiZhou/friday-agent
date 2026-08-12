@@ -2,6 +2,21 @@
 
 All notable changes to Friday Agent are documented here.
 
+## 0.2.0 - 2026-08-12
+
+### Added
+
+- Replace production diagnostic fixtures with a general Remote Agent loop that repeatedly plans, invokes structured node tools, observes real results, and returns an evidence-based conclusion.
+- Add Hub-derived per-call R0-R3 policy, exact signed tool authority, durable Web clearance, and independent iLink/Telegram clearance notifications.
+- Add restart-safe Agent checkpoints with bounded observation history, monotonic event recovery, non-Git node runtimes, and signed Runner-to-Hub resume reconciliation.
+
+### Security
+
+- Reject expired approval leases without executing the old call; redispatch the Agent under a fresh lease to re-plan.
+- Keep legacy diagnostic Jobs readable for audit but permanently exclude them from new creation and dispatch.
+- Remove the obsolete `fixture-app-server` image from the public deployment tree so it cannot be mistaken for a production Agent runtime.
+- Deny process environments, credential/private-key paths, and sensitive service configuration from file tools; bound recursive search and redact credential-shaped output.
+
 ## 0.1.1 - 2026-08-12
 
 ### Fixed

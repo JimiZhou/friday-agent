@@ -4,14 +4,14 @@
 
 Friday Agent 是一个单用户、自托管的私人设备管家。你通过 Web、微信 iLink 或 Telegram 和它对话；Hub 负责身份、策略、审计和调度，轻量 Runner 在受控节点上执行任务。模型不会直接拿到 SSH、Root、Docker socket 或长期供应商密钥。
 
-> 当前版本：`v0.1.1`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
+> 当前版本：`v0.2.0`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
 
 ## 它能做什么
 
 - 用 Web 控制台对话，查看设备、任务、Diff、制品和待授权操作。
 - 接收文字、图片和短视频；在受支持的浏览器中连续语音识别、朗读和开口打断。
 - 在微信 iLink 扫码绑定后收发私聊；通过 Telegram Bot 接受唯一 Owner 的私聊。远端任务完成、失败或取消后，Gateway 会持久化重试并回推终态和有界结果摘要。
-- 自动选择已登记、在线且能力匹配的节点，在独立 Git Worktree 和无网络 Sandbox 中调用固定版本的 Codex、Pi 或 Claude Code。
+- 自动选择已登记、在线且能力匹配的节点：通用 Remote Agent 使用独立临时运行目录，Codex、Pi 或 Claude Code 使用独立 Git Worktree；两者都进入无网络 Sandbox。
 - 通过 Hub 提供受限网络搜索；MCP、Skill 和 Procedure 默认关闭，启用前需要来源、版本、能力和回放证据。
 - 让外部模型提出 Pi 升级或架构改进，但只能先生成隔离补丁和测试证据。涉及联网安装、重启、部署、凭据、Root 或删除时，Friday 必须说明背景、风险和回滚方案，并申请 R2/R3 clearance。
 
@@ -34,6 +34,7 @@ flowchart LR
 - **Hub 是控制根**：保存策略、审批、设备身份、会话和审计；始终只监听 `127.0.0.1:4310`。
 - **Runner 只出站**：登记后主动访问 Hub，不开放 Friday 管理端口；SSH 只用于首次安装和升级。
 - **执行强隔离**：Worktree 不是 Sandbox。真实工具必须经 root-owned `friday-sandboxd` 进入固定内容 ID 的容器。
+- **通用 Agent 能力**：Remote Agent 自主规划并组合系统、进程、服务、日志、网络和受限文件工具；Hub 对每次调用单独分级与签名，不按具体诊断场景写分支。
 - **凭据留在 Hub**：Runner 为当前签名 Job 换取短时模型令牌，节点不保存长期模型 Key。
 - **默认拒绝**：配置不完整、设备离线、能力不匹配、租约过期、签名错误或 clearance 缺失时不执行。
 
@@ -92,7 +93,7 @@ npm run fridayctl -- runner bootstrap node-user@managed-node.example-tailnet.ts.
   --hub-url https://friday-hub.example-tailnet.ts.net \
   --runner-name managed-node-01 \
   --service-user node-user \
-  --workspace project=/srv/friday-workspaces/project \
+  --workspace node=/srv/friday-nodes/node \
   --identity-file "$HOME/.ssh/friday_agent" \
   --dry-run
 ```
@@ -106,7 +107,7 @@ npm run fridayctl -- runner bootstrap node-user@managed-node.example-tailnet.ts.
   --hub-url https://friday-hub.example-tailnet.ts.net \
   --runner-name managed-node-01 \
   --service-user node-user \
-  --workspace project=/srv/friday-workspaces/project \
+  --workspace node=/srv/friday-nodes/node \
   --identity-file "$HOME/.ssh/friday_agent"
 unset FRIDAY_OWNER_TOKEN
 ```
@@ -122,6 +123,8 @@ npm run fridayctl -- runner sandbox install node-user@managed-node.example-tailn
 ```
 
 安装器固定并验证 `@openai/codex@0.145.0`、`@earendil-works/pi-coding-agent@0.84.1` 和 `@anthropic-ai/claude-code@2.1.227`，失败时恢复旧 release。Runner 后续升级使用 `fridayctl runner upgrade`，保留原设备身份、Hub pin 和 Workspace Registry。
+
+`node` 只是目标节点的本地能力标识，路径只需是一个受控的现有目录，不需要 Git。只有提交给 Codex/Pi/Claude 的源码 Workspace 才必须是 Git 顶层目录。Remote Agent 会根据目标自主组合结构化节点工具；没有真实节点观察时不能直接宣称完成，单个工具失败会作为观察返回给 Agent 重新规划。遇到 R1-R3 调用时保存有界观察上下文并暂停，iLink/Telegram 主动通知，Owner 在 Web 核对精确参数后继续。授权超过当前租约不会执行旧调用，而是签发新租约让 Agent 重新规划。
 
 ## 不使用 Tailscale
 
@@ -179,9 +182,9 @@ curl -fsS http://127.0.0.1:4310/health
 
 ## 项目状态与非目标
 
-已验证的核心包括：Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器对讲，Codex/Pi/Claude 真实 Sandbox 调用，短时模型凭据代理，以及 Self Improvement 的测试证据、R2/R3 clearance 和 Canary 门禁。
+已验证的核心包括：Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器对讲，通用 Remote Agent 与逐调用 Node Tool Policy，固定 Codex/Pi/Claude CLI 的 Sandbox HTTP 合约，真实节点工具的多步循环，短时模型凭据代理，以及 Self Improvement 的测试证据、R2/R3 clearance 和 Canary 门禁。公开测试使用受控模型 fixture；每次生产部署仍必须使用自己的 Provider 完成只读 Remote Agent E2E。
 
-`v0.1.1` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
+`v0.2.0` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
 
 ## License
 

@@ -29,7 +29,7 @@ export interface ConversationAgent {
 
 export interface ConversationCapability {
   readonly workspaceId: string;
-  readonly tools: readonly ("codex" | "pi" | "claude" | "diagnostic")[];
+  readonly tools: readonly ("agent" | "codex" | "pi" | "claude")[];
 }
 
 export interface ConversationToolDefinition {
@@ -340,7 +340,7 @@ export function buildConversationPrompt(
     "Return exactly one JSON object and no Markdown. It must be either:",
     '{"reply":"owner-facing response"}',
     "or:",
-    '{"reply":"owner-facing response","jobProposal":{"workspaceId":"allowed-id","tool":"diagnostic|codex|pi|claude","operation":"diagnose|develop|review|test","prompt":"bounded natural-language task","runnerSelector":"auto"}}',
+    '{"reply":"owner-facing response","jobProposal":{"workspaceId":"allowed-id","tool":"agent|codex|pi|claude","operation":"diagnose|develop|review|test","prompt":"bounded natural-language task","runnerSelector":"auto"}}',
     "or, when current information is needed and the exact tool appears in tools:",
     '{"reply":"briefly say what is being checked","toolCall":{"name":"web_search|fleet_status","input":"bounded plain-text input"}}',
     "or, only when proposing a change to Friday itself:",
@@ -391,7 +391,7 @@ function parseProposal(value: unknown): ConversationJobProposal {
   if (
     typeof value.workspaceId !== "string" ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value.workspaceId) ||
-    (value.tool !== "codex" && value.tool !== "pi" && value.tool !== "claude" && value.tool !== "diagnostic") ||
+    (value.tool !== "agent" && value.tool !== "codex" && value.tool !== "pi" && value.tool !== "claude") ||
     (value.operation !== "develop" && value.operation !== "diagnose" && value.operation !== "review" && value.operation !== "test") ||
     typeof value.prompt !== "string" ||
     value.prompt.trim() === "" ||
@@ -448,7 +448,7 @@ function normalizeCapabilities(capabilities: readonly ConversationCapability[]):
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(capability.workspaceId)) continue;
     const tools = normalized.get(capability.workspaceId) ?? new Set();
     for (const tool of capability.tools) {
-      if (tool === "codex" || tool === "pi" || tool === "claude" || tool === "diagnostic") tools.add(tool);
+      if (tool === "agent" || tool === "codex" || tool === "pi" || tool === "claude") tools.add(tool);
     }
     normalized.set(capability.workspaceId, tools);
   }

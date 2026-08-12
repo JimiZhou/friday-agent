@@ -64,7 +64,6 @@ export interface SandboxInstallOptions extends SshConnectionOptions {
 export interface SandboxInstallResult {
   readonly target: string;
   readonly releaseId: string;
-  readonly diagnosticImageId: string;
   readonly agentImageId: string;
 }
 
@@ -226,7 +225,7 @@ export async function createRunnerRelease(repoRoot: string, outputDirectory: str
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "runner", "friday-runner-managed@.service"), join(releaseRoot, "friday-runner-managed@.service"));
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
-  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.1.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.2.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   const archive = join(outputDirectory, "friday-runner.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);
@@ -245,7 +244,6 @@ export async function createSandboxdRelease(repoRoot: string, outputDirectory: s
     join(root, "apps", "sandboxd", "dist", "agent-wrapper.js"),
     join(root, "packages", "protocol", "dist", "index.js"),
     join(root, "deploy", "sandboxd", "friday-sandboxd.service"),
-    join(root, "deploy", "sandboxd", "fixture", "Dockerfile"),
     join(root, "deploy", "sandboxd", "agent", "Dockerfile"),
     join(root, "deploy", "sandboxd", "agent", "package-lock.json"),
     join(root, "deploy", "sandboxd", "agent", "verify-agent-contracts.mjs"),
@@ -254,11 +252,10 @@ export async function createSandboxdRelease(repoRoot: string, outputDirectory: s
   await cp(join(root, "apps", "sandboxd", "package.json"), join(releaseRoot, "apps", "sandboxd", "package.json"));
   await cp(join(root, "packages", "protocol", "dist"), join(releaseRoot, "packages", "protocol", "dist"), { recursive: true });
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
-  await cp(join(root, "deploy", "sandboxd", "fixture"), join(releaseRoot, "fixture"), { recursive: true });
   await cp(join(root, "deploy", "sandboxd", "agent"), join(releaseRoot, "agent"), { recursive: true });
   await cp(join(root, "deploy", "sandboxd", "friday-sandboxd.service"), join(releaseRoot, "friday-sandboxd.service"));
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
-  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.1.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.2.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   const archive = join(outputDirectory, "friday-sandboxd.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);
@@ -286,12 +283,11 @@ export async function installSandboxd(options: SandboxInstallOptions): Promise<S
     const privilege = await remotePrivilege(options);
     const output = await ssh(options, `${privilege} sh ${remoteInstaller} ${remoteArchive} ${release.sha256} ${options.serviceUser} ${options.hubUrl.origin}`, 30 * 60_000);
     const releaseId = output.match(/^release_id=([a-f0-9]{16})$/m)?.[1];
-    const diagnosticImageId = output.match(/^diagnostic_image_id=(sha256:[a-f0-9]{64})$/m)?.[1];
     const agentImageId = output.match(/^agent_image_id=(sha256:[a-f0-9]{64})$/m)?.[1];
-    if (releaseId !== release.releaseId || diagnosticImageId === undefined || agentImageId === undefined) {
+    if (releaseId !== release.releaseId || agentImageId === undefined) {
       throw new Error("Remote Sandbox installer returned invalid release evidence");
     }
-    return { target: options.target, releaseId, diagnosticImageId, agentImageId };
+    return { target: options.target, releaseId, agentImageId };
   } finally {
     await rm(temporary, { recursive: true, force: true });
     if (uploaded) await ssh(options, `rm -f ${remoteArchive} ${remoteInstaller}`, 10_000).catch(() => undefined);

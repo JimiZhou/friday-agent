@@ -9,7 +9,7 @@ function runner(runnerId, overrides = {}) {
   return {
     nodeId: runnerId,
     displayName: `runner-${runnerId.slice(-1)}`,
-    version: "0.1.0",
+    version: "0.2.0",
     capabilities: ["orchestration", "sandbox"],
     workspaces: ["infra"],
     shellExecution: false,
@@ -33,7 +33,7 @@ test("fleet scheduler chooses the least-loaded compatible Runner deterministical
     isEnrolled: () => true,
     adapterEnabled: () => true,
   };
-  assert.deepEqual(selectFleetRunner({ workspaceId: "infra", tool: "diagnostic" }, context), {
+  assert.deepEqual(selectFleetRunner({ workspaceId: "infra", tool: "agent" }, context), {
     runnerId: runnerB,
     displayName: "runner-2",
     load: 1,

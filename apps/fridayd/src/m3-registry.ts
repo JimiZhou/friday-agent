@@ -170,7 +170,7 @@ export interface SignedProcedure {
   readonly signature: string;
 }
 
-export type SandboxAdapter = "codex-app-server" | "pi-rpc" | "claude-code";
+export type SandboxAdapter = "remote-agent" | "codex-app-server" | "pi-rpc" | "claude-code";
 export interface AdapterDefinition { readonly runnerId: string; readonly adapter: SandboxAdapter; readonly image: string; readonly imageId: string; }
 /**
  * A runner/adapter pair must first be pinned and enabled by the Owner. The
@@ -792,7 +792,7 @@ function validateProcedure(procedure: SignedProcedure): void { requireName(proce
 function validateSkill(skill: SignedSkill): void { requireName(skill.id, "Skill id"); requireVersion(skill.version); requireSha(skill.contentSha256, "Skill content hash"); let source: URL; try { source = new URL(skill.source); } catch { throw new Error("Invalid skill source"); } if (source.protocol !== "https:" || source.username !== "" || source.password !== "" || source.hash !== "") throw new Error("Invalid skill source"); if (skill.capabilities.length === 0 || skill.capabilities.length > 32 || skill.capabilities.some((item) => !/^[a-z][a-z0-9_.-]{0,63}$/.test(item))) throw new Error("Invalid skill capabilities"); if (!/^[A-Za-z0-9_-]{86}$/.test(skill.signature)) throw new Error("Invalid skill signature"); }
 function skillView(row: Record<string, unknown>): SkillView { return { id: row.id as string, version: row.version as string, source: row.source as string, contentSha256: row.contentSha256 as string, capabilities: JSON.parse(row.capabilitiesJson as string) as readonly string[], enabled: row.enabled === 1, sandboxVerified: row.sandboxVerified === 1 }; }
 function validateAdapter(definition: AdapterDefinition): void { if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(definition.runnerId)) throw new Error("Invalid Runner id"); validateAdapterName(definition.adapter); if (!/^[a-z0-9][a-z0-9._/-]{0,255}(?::[A-Za-z0-9._-]{1,128})?$/.test(definition.image) || definition.image.endsWith(":" + "latest")) throw new Error("Adapter image must be an explicit deployment reference"); if (!/^sha256:[a-f0-9]{64}$/.test(definition.imageId)) throw new Error("Adapter image ID must be immutable sha256"); }
-function validateAdapterName(value: string): asserts value is SandboxAdapter { if (value !== "codex-app-server" && value !== "pi-rpc" && value !== "claude-code") throw new Error("Unsupported sandbox adapter"); }
+function validateAdapterName(value: string): asserts value is SandboxAdapter { if (value !== "remote-agent" && value !== "codex-app-server" && value !== "pi-rpc" && value !== "claude-code") throw new Error("Unsupported sandbox adapter"); }
 function requireName(value: string, label: string): void { if (!/^[a-z][a-z0-9_-]{0,63}$/.test(value)) throw new Error(`Invalid ${label}`); }
 function requireVersion(value: string): void { if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error("Invalid version"); }
 function requireSha(value: string, label: string): void { if (!/^[a-f0-9]{64}$/.test(value)) throw new Error(`Invalid ${label}`); }

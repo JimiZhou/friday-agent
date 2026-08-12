@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { PROTOCOL_VERSION } from "@friday/protocol";
 import { JOB_PROTOCOL_VERSION } from "@friday/protocol";
-import type { InboundMessageV1, PiWorkerImageV1, RunnerEnvelopeV1, RunnerJobEventV2, RunnerModelAccessRequestV2, RunnerModelProviderV2, RunnerPullRequestV2 } from "@friday/protocol";
+import type { InboundMessageV1, NodeToolCallV1, PiWorkerImageV1, RunnerEnvelopeV1, RunnerJobEventV2, RunnerModelAccessRequestV2, RunnerModelProviderV2, RunnerPullRequestV2 } from "@friday/protocol";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import * as QRCode from "qrcode";
 import { validateConfig, type FridayConfig } from "./config.js";
@@ -43,6 +43,7 @@ import { SelfImprovementCoordinator, SelfImprovementJobRegistry, selfImprovement
 import { FixedWebSearch } from "./web-search.js";
 import { ownerPasswordMatches } from "./owner-password.js";
 import { RunnerModelAccessBroker, modelProxyResponseHeaders } from "./model-access.js";
+import { NodeToolPolicy } from "./node-tool-policy.js";
 import {
   OWNER_WEB_CSS as OWNER_CONSOLE_CSS,
   OWNER_WEB_HTML as OWNER_CONSOLE_HTML,
@@ -296,7 +297,7 @@ function parseJobCreate(value: unknown): ParsedJobCreate | undefined {
     (!explicit && !automatic) ||
     typeof value.idempotencyKey !== "string" ||
     typeof value.workspaceId !== "string" ||
-    (!["codex", "pi", "claude", "diagnostic"].includes(value.tool as string)) ||
+    (!["agent", "codex", "pi", "claude"].includes(value.tool as string)) ||
     !["develop", "diagnose", "review", "test"].includes(value.operation as string) ||
     typeof value.prompt !== "string"
   ) return undefined;
@@ -533,6 +534,7 @@ export interface FridayServer {
   readonly conversationMediaRegistry: ConversationMediaRegistry;
   readonly conversationRegistry: ConversationRegistry;
   readonly channelOutbox: ChannelOutbox;
+  readonly nodeToolPolicy: NodeToolPolicy;
   readonly modelAccessBroker?: RunnerModelAccessBroker;
   readonly artifactStore: JobArtifactStore;
   readonly hubIdentity: HubIdentity;
@@ -553,6 +555,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   const runnerRegistry = new SqliteRunnerRegistry(databasePath);
   const hubIdentity = await loadOrCreateHubIdentity(config.stateDir);
   const jobRegistry = new SqliteJobRegistry(databasePath, hubIdentity);
+  const nodeToolPolicy = new NodeToolPolicy(databasePath, hubIdentity, jobRegistry);
   const modelAccessBroker = config.runnerModelProxy === undefined ? undefined : new RunnerModelAccessBroker(config.runnerModelProxy, jobRegistry);
   const memoryRegistry = new MemoryRegistry(databasePath);
   const channelRegistry = new ChannelIngestRegistry(databasePath);
@@ -573,6 +576,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   try {
     runnerRegistry.open();
     jobRegistry.open();
+    nodeToolPolicy.open();
     memoryRegistry.open();
     channelRegistry.open();
     channelOutbox.open();
@@ -600,6 +604,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     selfImprovementJobRegistry.close();
     mcpRegistry.close();
     adapterRegistry.close();
+    nodeToolPolicy.close();
     jobRegistry.close();
     runnerRegistry.close();
     await store.close();
@@ -622,6 +627,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     selfImprovementJobRegistry.close();
     mcpRegistry.close();
     adapterRegistry.close();
+    nodeToolPolicy.close();
     jobRegistry.close();
     runnerRegistry.close();
     await store.close();
@@ -637,6 +643,9 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   await selfImprovementCoordinator.reconcile();
   const jobChannelNotifier = new JobChannelNotifier(channelOutbox, jobRegistry);
   jobChannelNotifier.reconcile();
+  for (const approval of nodeToolPolicy.listPending()) {
+    jobChannelNotifier.requestClearance(approval.call, { status: "WAIT_APPROVAL", risk: approval.risk, background: approval.background });
+  }
   const conversationAgent = options.conversationAgent === null
     ? undefined
     : options.conversationAgent ?? conversationAgentFromConfig(config);
@@ -679,7 +688,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     for (const runner of state.listRunners()) {
       if (
         !runnerRegistry.isEnrolled(runner.nodeId) ||
-        runner.version !== "0.1.0" ||
+        runner.version !== "0.2.0" ||
         !runner.online ||
         runner.status !== "online" ||
         !runner.capabilities.includes("orchestration") ||
@@ -687,7 +696,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       ) continue;
       for (const workspaceId of runner.workspaces) {
         const tools = byWorkspace.get(workspaceId) ?? new Set<ConversationCapability["tools"][number]>();
-        tools.add("diagnostic");
+        if (adapterRegistry.resolve(runner.nodeId, "remote-agent") !== undefined) tools.add("agent");
         if (adapterRegistry.resolve(runner.nodeId, "codex-app-server") !== undefined) tools.add("codex");
         if (adapterRegistry.resolve(runner.nodeId, "pi-rpc") !== undefined) tools.add("pi");
         if (adapterRegistry.resolve(runner.nodeId, "claude-code") !== undefined) tools.add("claude");
@@ -725,7 +734,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         activeJobs: Math.max(runner.activeJobs, assignedJobs.get(runner.nodeId) ?? 0),
         workspaces: [...runner.workspaces],
         tools: [
-          "diagnostic",
+          ...(adapterRegistry.resolve(runner.nodeId, "remote-agent") === undefined ? [] : ["agent"]),
           ...(adapterRegistry.resolve(runner.nodeId, "codex-app-server") === undefined ? [] : ["codex"]),
           ...(adapterRegistry.resolve(runner.nodeId, "pi-rpc") === undefined ? [] : ["pi"]),
           ...(adapterRegistry.resolve(runner.nodeId, "claude-code") === undefined ? [] : ["claude"]),
@@ -906,7 +915,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         json(response, 200, {
           status: "ok",
           service: "fridayd",
-          version: "0.1.1",
+          version: "0.2.0",
           protocolVersion: PROTOCOL_VERSION,
         });
         return;
@@ -916,7 +925,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       const isRunnerHeartbeat =
         method === "POST" && /^\/v1\/runners\/[^/]+\/heartbeat$/.test(url.pathname);
       const isRunnerEnrollment = method === "POST" && url.pathname === "/v1/runners/enroll";
-      const isRunnerV2 = method === "POST" && /^\/v2\/runners\/[0-9a-f-]+(?:\/pull|\/jobs\/[0-9a-f-]+\/(?:events|reconcile|model-access|artifacts\/[0-9a-f-]+))$/i.test(url.pathname);
+      const isRunnerV2 = method === "POST" && /^\/v2\/runners\/[0-9a-f-]+(?:\/pull|\/jobs\/[0-9a-f-]+\/(?:events|reconcile|model-access|agent-resume|node-tools\/(?:evaluate|[0-9a-f-]+\/status)|artifacts\/[0-9a-f-]+))$/i.test(url.pathname);
       const isModelProxy = method === "POST" && /^\/v2\/model-proxy\/(?:openai|anthropic)\/v1\/(?:responses(?:\/compact)?|chat\/completions|messages(?:\/count_tokens)?)$/.test(url.pathname);
       const isHubKey = method === "GET" && url.pathname === "/v2/hub-key";
       const isWebAuthnBootstrapContinue = method === "POST" && ["/v2/auth/register/options", "/v2/auth/register/verify"].includes(url.pathname);
@@ -1421,13 +1430,13 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (method === "GET" && url.pathname === "/v3/runner-adapters") { json(response, 200, { adapters: adapterRegistry.list(), scheduling: "explicit-runner-selection-only" }); return; }
       if (method === "POST" && url.pathname === "/v3/runner-adapters") {
         const body = await parseJsonBody(request, config.maxBodyBytes);
-        if (!isRecord(body.value) || Object.keys(body.value).length !== 4 || typeof body.value.runnerId !== "string" || (body.value.adapter !== "codex-app-server" && body.value.adapter !== "pi-rpc" && body.value.adapter !== "claude-code") || typeof body.value.image !== "string" || typeof body.value.imageId !== "string") { error(response, 400, "INVALID_ADAPTER", "Runner adapter is invalid"); return; }
+        if (!isRecord(body.value) || Object.keys(body.value).length !== 4 || typeof body.value.runnerId !== "string" || (body.value.adapter !== "remote-agent" && body.value.adapter !== "codex-app-server" && body.value.adapter !== "pi-rpc" && body.value.adapter !== "claude-code") || typeof body.value.image !== "string" || typeof body.value.imageId !== "string") { error(response, 400, "INVALID_ADAPTER", "Runner adapter is invalid"); return; }
         const requestedRunnerId = body.value.runnerId.toLowerCase();
         if (!runnerRegistry.isEnrolled(requestedRunnerId) || !state.listRunners().some((runner) => runner.nodeId === requestedRunnerId)) { error(response, 409, "RUNNER_NOT_REGISTERED", "An adapter can only be pinned to an enrolled, registered Runner"); return; }
         try { adapterRegistry.register({ runnerId: body.value.runnerId.toLowerCase(), adapter: body.value.adapter, image: body.value.image, imageId: body.value.imageId } as AdapterDefinition); json(response, 201, { registered: true, enabled: false }); } catch { error(response, 400, "INVALID_ADAPTER", "Runner adapter requires an immutable image ID"); }
         return;
       }
-      const adapterState = url.pathname.match(/^\/v3\/runners\/([0-9a-f-]+)\/adapters\/(codex-app-server|pi-rpc|claude-code)\/(enable|disable)$/i);
+      const adapterState = url.pathname.match(/^\/v3\/runners\/([0-9a-f-]+)\/adapters\/(remote-agent|codex-app-server|pi-rpc|claude-code)\/(enable|disable)$/i);
       if (method === "POST" && adapterState?.[1] !== undefined && adapterState[2] !== undefined && adapterState[3] !== undefined) {
         const body = await parseJsonBody(request, config.maxBodyBytes); if (!isEmptyObject(body.value)) { error(response, 400, "INVALID_ADAPTER", "Body must be an empty JSON object"); return; }
         const runnerId = adapterState[1].toLowerCase(); const adapter = adapterState[2] as AdapterDefinition["adapter"];
@@ -1712,7 +1721,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (method === "GET" && url.pathname === "/v2/fleet") {
         const workspaceId = url.searchParams.get("workspaceId");
         const tool = url.searchParams.get("tool");
-        if (workspaceId === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(workspaceId) || tool === null || !["codex", "pi", "claude", "diagnostic"].includes(tool)) {
+        if (workspaceId === null || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(workspaceId) || tool === null || !["agent", "codex", "pi", "claude"].includes(tool)) {
           error(response, 400, "INVALID_FLEET_QUERY", "workspaceId and tool are required");
           return;
         }
@@ -1774,6 +1783,24 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         return;
       }
 
+      if (method === "GET" && url.pathname === "/v2/node-tool-approvals") {
+        json(response, 200, { approvals: nodeToolPolicy.listPending() });
+        return;
+      }
+
+      const nodeToolApprovalMatch = url.pathname.match(/^\/v2\/node-tool-approvals\/([0-9a-f-]+)\/approve$/i);
+      if (method === "POST" && nodeToolApprovalMatch?.[1] !== undefined) {
+        if (!clearanceAuthorized(request, method)) { error(response, 403, "STRONG_CLEARANCE_REQUIRED", "An authenticated Owner Web session is required for node tool clearance"); return; }
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        if (!isEmptyObject(body.value)) { error(response, 400, "INVALID_NODE_TOOL_APPROVAL", "Body must be an empty JSON object"); return; }
+        try {
+          const decision = nodeToolPolicy.approve(nodeToolApprovalMatch[1].toLowerCase(), config.ownerId);
+          json(response, decision.status === "APPROVED" ? 200 : 202, { approved: decision.status === "APPROVED", decision });
+        }
+        catch (caught) { error(response, 409, "NODE_TOOL_NOT_APPROVABLE", caught instanceof Error ? caught.message : "Node tool call cannot be approved"); }
+        return;
+      }
+
       const artifactDownloadMatch = url.pathname.match(/^\/v2\/jobs\/([0-9a-f-]+)\/artifacts\/([0-9a-f-]+)$/i);
       if (method === "GET" && artifactDownloadMatch?.[1] !== undefined && artifactDownloadMatch[2] !== undefined) {
         const downloadJobId = artifactDownloadMatch[1].toLowerCase(); const downloadArtifactId = artifactDownloadMatch[2].toLowerCase();
@@ -1810,7 +1837,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const body = await parseJsonBody(request, config.maxBodyBytes);
         const value = body.value;
         if (modelAccessBroker === undefined) { error(response, 503, "RUNNER_MODEL_PROXY_DISABLED", "Runner model access is not configured"); return; }
-        if (!isRecord(value) || Object.keys(value).length !== 7 || value.protocolVersion !== JOB_PROTOCOL_VERSION || value.runnerId !== runnerId || value.jobId !== jobId || typeof value.requestId !== "string" || typeof value.leaseId !== "string" || (value.tool !== "codex" && value.tool !== "pi" && value.tool !== "claude") || typeof value.sentAt !== "string" || !runnerRegistry.verifyRequestV2(runnerId, singleHeader(request.headers["x-friday-runner-signature"]), method, url.pathname, body.raw)) {
+        if (!isRecord(value) || Object.keys(value).length !== 7 || value.protocolVersion !== JOB_PROTOCOL_VERSION || value.runnerId !== runnerId || value.jobId !== jobId || typeof value.requestId !== "string" || typeof value.leaseId !== "string" || (value.tool !== "agent" && value.tool !== "codex" && value.tool !== "pi" && value.tool !== "claude") || typeof value.sentAt !== "string" || !runnerRegistry.verifyRequestV2(runnerId, singleHeader(request.headers["x-friday-runner-signature"]), method, url.pathname, body.raw)) {
           error(response, 401, "RUNNER_DEVICE_AUTH_REQUIRED", "A valid signed Runner model access request is required");
           return;
         }
@@ -1818,6 +1845,54 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           json(response, 201, { grant: modelAccessBroker.issue(value as unknown as RunnerModelAccessRequestV2) });
         } catch {
           error(response, 409, "MODEL_ACCESS_REJECTED", "Model access does not match an active assigned Job lease");
+        }
+        return;
+      }
+
+      const runnerNodeToolMatchV2 = url.pathname.match(/^\/v2\/runners\/([0-9a-f-]+)\/jobs\/([0-9a-f-]+)\/node-tools\/evaluate$/i);
+      if (method === "POST" && runnerNodeToolMatchV2?.[1] !== undefined && runnerNodeToolMatchV2[2] !== undefined) {
+        const runnerId = runnerNodeToolMatchV2[1].toLowerCase();
+        const jobId = runnerNodeToolMatchV2[2].toLowerCase();
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        if (!runnerRegistry.verifyRequestV2(runnerId, singleHeader(request.headers["x-friday-runner-signature"]), method, url.pathname, body.raw) || !isRecord(body.value) || body.value.runnerId !== runnerId || body.value.jobId !== jobId) {
+          error(response, 401, "RUNNER_DEVICE_AUTH_REQUIRED", "A valid signed Runner node tool request is required"); return;
+        }
+        try {
+          const decision = nodeToolPolicy.evaluate(body.value as unknown as NodeToolCallV1);
+          if (decision.status === "WAIT_APPROVAL") {
+            modelAccessBroker?.revokeJob(jobId);
+            jobChannelNotifier.requestClearance(body.value as unknown as NodeToolCallV1, decision);
+          }
+          json(response, decision.status === "APPROVED" ? 201 : decision.status === "WAIT_APPROVAL" ? 202 : 409, { decision });
+        } catch (caught) {
+          error(response, 409, "NODE_TOOL_REJECTED", caught instanceof Error ? caught.message : "Node tool call was rejected");
+        }
+        return;
+      }
+
+      const runnerNodeToolStatusMatchV2 = url.pathname.match(/^\/v2\/runners\/([0-9a-f-]+)\/jobs\/([0-9a-f-]+)\/node-tools\/([0-9a-f-]+)\/status$/i);
+      if (method === "POST" && runnerNodeToolStatusMatchV2?.[1] !== undefined && runnerNodeToolStatusMatchV2[2] !== undefined && runnerNodeToolStatusMatchV2[3] !== undefined) {
+        const runnerId = runnerNodeToolStatusMatchV2[1].toLowerCase(); const jobId = runnerNodeToolStatusMatchV2[2].toLowerCase(); const callId = runnerNodeToolStatusMatchV2[3].toLowerCase();
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        if (!isRecord(body.value) || Object.keys(body.value).length !== 3 || body.value.jobId !== jobId || body.value.callId !== callId || body.value.runnerId !== runnerId || !runnerRegistry.verifyRequestV2(runnerId, singleHeader(request.headers["x-friday-runner-signature"]), method, url.pathname, body.raw)) { error(response, 401, "RUNNER_DEVICE_AUTH_REQUIRED", "A valid signed node tool status request is required"); return; }
+        const approval = nodeToolPolicy.get(callId);
+        if (approval === undefined || approval.call.jobId !== jobId || approval.call.runnerId !== runnerId) { error(response, 404, "NODE_TOOL_NOT_FOUND", "No node tool call matches this Job"); return; }
+        json(response, 200, { decision: nodeToolPolicy.decision(callId) });
+        return;
+      }
+
+      const runnerAgentResumeMatchV2 = url.pathname.match(/^\/v2\/runners\/([0-9a-f-]+)\/jobs\/([0-9a-f-]+)\/agent-resume$/i);
+      if (method === "POST" && runnerAgentResumeMatchV2?.[1] !== undefined && runnerAgentResumeMatchV2[2] !== undefined) {
+        const runnerId = runnerAgentResumeMatchV2[1].toLowerCase(); const jobId = runnerAgentResumeMatchV2[2].toLowerCase();
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        if (!isRecord(body.value) || Object.keys(body.value).length !== 6 || body.value.protocolVersion !== JOB_PROTOCOL_VERSION || body.value.runnerId !== runnerId || body.value.jobId !== jobId || typeof body.value.leaseId !== "string" || (body.value.phase !== "planning" && body.value.phase !== "tool_pending") || typeof body.value.sentAt !== "string" || !runnerRegistry.verifyRequestV2(runnerId, singleHeader(request.headers["x-friday-runner-signature"]), method, url.pathname, body.raw)) {
+          error(response, 401, "RUNNER_DEVICE_AUTH_REQUIRED", "A valid signed Remote Agent recovery request is required"); return;
+        }
+        try {
+          const recovered = jobRegistry.recoverAgent(jobId, runnerId, body.value.leaseId);
+          json(response, recovered.disposition === "READY" ? 202 : 200, recovered);
+        } catch (caught) {
+          error(response, 409, "AGENT_RECOVERY_REJECTED", caught instanceof Error ? caught.message : "Remote Agent recovery was rejected");
         }
         return;
       }
@@ -2197,6 +2272,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     conversationMediaRegistry,
     conversationRegistry,
     channelOutbox,
+    nodeToolPolicy,
     ...(modelAccessBroker === undefined ? {} : { modelAccessBroker }),
     artifactStore,
     hubIdentity,
@@ -2218,6 +2294,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           selfImprovementJobRegistry.close();
           mcpRegistry.close();
           adapterRegistry.close();
+          nodeToolPolicy.close();
           jobRegistry.close();
           runnerRegistry.close();
           void Promise.all([store.close(), conversationOrchestrator?.close() ?? Promise.resolve()]).then(
@@ -2244,6 +2321,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
             selfImprovementJobRegistry.close();
             mcpRegistry.close();
             adapterRegistry.close();
+            nodeToolPolicy.close();
             jobRegistry.close();
             runnerRegistry.close();
             void Promise.all([store.close(), conversationOrchestrator?.close() ?? Promise.resolve()]).then(
@@ -2276,6 +2354,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       selfImprovementJobRegistry.close();
       mcpRegistry.close();
       adapterRegistry.close();
+      nodeToolPolicy.close();
       jobRegistry.close();
       runnerRegistry.close();
       await store.close();

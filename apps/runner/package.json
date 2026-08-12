@@ -1,6 +1,6 @@
 {
   "name": "@friday/runner",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Outbound-only Friday runner skeleton",
   "type": "module",
@@ -18,6 +18,6 @@
     "start": "node --enable-source-maps dist/index.js"
   },
   "dependencies": {
-    "@friday/protocol": "0.1.0"
+    "@friday/protocol": "0.2.0"
   }
 }

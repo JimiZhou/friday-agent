@@ -18,10 +18,8 @@ export interface SandboxdConfig {
   readonly socketPath: string;
   readonly runnerStateDir: string;
   readonly hubPublicKeyFile: string;
-  readonly image: string;
-  /** A Docker content ID is checked before every run, making a local fixture tag immutable in practice. */
-  readonly imageId: string;
-  /** Optional M3 adapters; absent configuration rejects every non-diagnostic agent job. */
+  /** Optional adapters; absent configuration rejects the corresponding Job. */
+  readonly agentImage?: SandboxImage;
   readonly codexImage?: SandboxImage;
   readonly piImage?: SandboxImage;
   readonly claudeImage?: SandboxImage;
@@ -33,28 +31,27 @@ export interface SandboxdConfig {
   readonly runnerGid: number;
 }
 
-export interface SandboxRequest { readonly spec: JobSpecV2; readonly worktreePath: string; readonly modelAccess?: RunnerModelAccessGrantV2; }
+export interface SandboxRequest { readonly spec: JobSpecV2; readonly worktreePath: string; readonly modelAccess?: RunnerModelAccessGrantV2; readonly agentPrompt?: string; }
 interface SandboxResponse { readonly ok: boolean; readonly exitCode?: number; readonly stdout?: string; readonly stderr?: string; readonly error?: string; readonly executorImageId?: string; }
 
 export function loadSandboxdConfig(env: NodeJS.ProcessEnv = process.env): SandboxdConfig {
   const socketPath = requireAbsolute(env.FRIDAY_SANDBOX_SOCKET ?? "/run/friday-sandboxd/sandboxd.sock", "FRIDAY_SANDBOX_SOCKET");
   const runnerStateDir = canonicalDirectory(env.FRIDAY_SANDBOX_RUNNER_STATE_DIR ?? "/var/lib/friday-runner", "FRIDAY_SANDBOX_RUNNER_STATE_DIR");
   const hubPublicKeyFile = requireAbsolute(env.FRIDAY_SANDBOX_HUB_PUBLIC_KEY_FILE ?? "", "FRIDAY_SANDBOX_HUB_PUBLIC_KEY_FILE");
-  if (typeof env.FRIDAY_SANDBOX_IMAGE !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}(?::[A-Za-z0-9._-]{1,128})?$/.test(env.FRIDAY_SANDBOX_IMAGE)) throw new Error("FRIDAY_SANDBOX_IMAGE must be a fixed local image reference without registry credentials");
-  if (!IMAGE_ID.test(env.FRIDAY_SANDBOX_IMAGE_ID ?? "")) throw new Error("FRIDAY_SANDBOX_IMAGE_ID must be an immutable sha256 Docker image id");
   const runnerUid = parseUnixId(env.FRIDAY_SANDBOX_RUNNER_UID, "FRIDAY_SANDBOX_RUNNER_UID");
   const runnerGid = parseUnixId(env.FRIDAY_SANDBOX_RUNNER_GID, "FRIDAY_SANDBOX_RUNNER_GID");
   const keyStats = lstatSync(hubPublicKeyFile);
   if (!keyStats.isFile() || keyStats.isSymbolicLink() || (keyStats.mode & 0o077) !== 0) throw new Error("FRIDAY_SANDBOX_HUB_PUBLIC_KEY_FILE must be a private regular file");
+  const agentImage = readAdapterImage(env, "AGENT");
   const codexImage = readAdapterImage(env, "CODEX");
   const piImage = readAdapterImage(env, "PI");
   const claudeImage = readAdapterImage(env, "CLAUDE");
-  const hasAgentImage = codexImage !== undefined || piImage !== undefined || claudeImage !== undefined;
+  const hasAgentImage = agentImage !== undefined || codexImage !== undefined || piImage !== undefined || claudeImage !== undefined;
   const hubUrl = env.FRIDAY_SANDBOX_HUB_URL === undefined || env.FRIDAY_SANDBOX_HUB_URL === "" ? undefined : parseHubUrl(env.FRIDAY_SANDBOX_HUB_URL);
   const modelRelayDirectory = hasAgentImage ? requireAbsolute(env.FRIDAY_SANDBOX_MODEL_RELAY_DIR ?? "/run/friday-sandboxd/model-relays", "FRIDAY_SANDBOX_MODEL_RELAY_DIR") : undefined;
   if (hasAgentImage && hubUrl === undefined) throw new Error("FRIDAY_SANDBOX_HUB_URL is required when an Agent image is enabled");
   const modelRelayMaxRequestBytes = parsePositiveInteger(env.FRIDAY_SANDBOX_MODEL_MAX_REQUEST_BYTES, 16 * 1_048_576, "FRIDAY_SANDBOX_MODEL_MAX_REQUEST_BYTES");
-  return { socketPath, runnerStateDir, hubPublicKeyFile, image: env.FRIDAY_SANDBOX_IMAGE as string, imageId: env.FRIDAY_SANDBOX_IMAGE_ID as string, ...(codexImage === undefined ? {} : { codexImage }), ...(piImage === undefined ? {} : { piImage }), ...(claudeImage === undefined ? {} : { claudeImage }), ...(hubUrl === undefined ? {} : { hubUrl }), ...(modelRelayDirectory === undefined ? {} : { modelRelayDirectory }), modelRelayMaxRequestBytes, runnerUid, runnerGid };
+  return { socketPath, runnerStateDir, hubPublicKeyFile, ...(agentImage === undefined ? {} : { agentImage }), ...(codexImage === undefined ? {} : { codexImage }), ...(piImage === undefined ? {} : { piImage }), ...(claudeImage === undefined ? {} : { claudeImage }), ...(hubUrl === undefined ? {} : { hubUrl }), ...(modelRelayDirectory === undefined ? {} : { modelRelayDirectory }), modelRelayMaxRequestBytes, runnerUid, runnerGid };
 }
 
 export function sandboxDockerArguments(config: SandboxdConfig, request: SandboxRequest): readonly string[] {
@@ -63,7 +60,7 @@ export function sandboxDockerArguments(config: SandboxdConfig, request: SandboxR
   const memory = `${spec.limits.memoryMiB}m`;
   const cpu = (spec.limits.cpuMillis / 1000).toFixed(3);
   const command = commandFor(spec.tool);
-  const modelMounts = spec.tool === "diagnostic" ? [] : [
+  const modelMounts = [
     "--mount", `type=bind,src=${modelRelaySocketPath(config, spec)},dst=/tmp/friday-model.sock,readonly`,
     "--env", "FRIDAY_MODEL_SOCKET=/tmp/friday-model.sock",
     "--env", "FRIDAY_MODEL_RELAY_PORT=34123",
@@ -74,7 +71,7 @@ export function sandboxDockerArguments(config: SandboxdConfig, request: SandboxR
     "run", "--rm", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
     "--pids-limit", "128", "--memory", memory, "--cpus", cpu, "--user", `${config.runnerUid}:${config.runnerGid}`,
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--mount", `type=bind,src=${request.worktreePath},dst=/workspace`,
-    "--workdir", "/workspace", "--env", `FRIDAY_JOB_ID=${spec.jobId}`, "--env", `FRIDAY_JOB_PROMPT=${spec.prompt}`,
+    "--workdir", "/workspace", "--env", `FRIDAY_JOB_ID=${spec.jobId}`, "--env", `FRIDAY_JOB_PROMPT=${request.agentPrompt ?? spec.prompt}`,
     ...modelMounts,
     image.image, ...command,
   ]);
@@ -86,6 +83,7 @@ export function validateRequest(config: SandboxdConfig, request: SandboxRequest)
   verifyAssignment(spec, readFileSync(config.hubPublicKeyFile, "utf8"));
   imageFor(config, spec.tool);
   validateModelAccess(config, spec, request.modelAccess);
+  if (request.agentPrompt !== undefined && (spec.tool !== "agent" || request.agentPrompt.trim() === "" || Buffer.byteLength(request.agentPrompt, "utf8") > 128 * 1024 || request.agentPrompt.includes("\0"))) throw new Error("Remote Agent continuation prompt is invalid");
   const runnerStateDir = canonicalDirectory(config.runnerStateDir, "Sandbox Runner state directory");
   const expected = join(runnerStateDir, "jobs", spec.jobId, "worktree");
   const worktree = canonicalDirectory(request.worktreePath, "Sandbox worktree");
@@ -97,7 +95,7 @@ export async function runSandboxJob(config: SandboxdConfig, request: SandboxRequ
   const spec = validateRequest(config, request);
   const image = imageFor(config, spec.tool);
   await assertImageId(image.image, image.imageId);
-  const relay = spec.tool === "diagnostic" ? undefined : await startModelRelay(config, request);
+  const relay = await startModelRelay(config, request);
   try {
     const args = sandboxDockerArguments(config, request);
     const { stdout, stderr } = await execFile("docker", args, { env: { PATH: process.env.PATH ?? "" }, timeout: spec.limits.timeoutSeconds * 1000, maxBuffer: spec.limits.maxOutputBytes, windowsHide: true });
@@ -152,18 +150,17 @@ function verifyAssignment(spec: JobSpecV2, publicKeyPem: string): void {
   const key = createPublicKey(publicKeyPem);
   if (key.asymmetricKeyType !== "ed25519" || !verify(null, Buffer.from(canonicalJsonV2(projection), "utf8"), key, Buffer.from(spec.hubSignature, "base64url"))) throw new Error("Job manifest signature is invalid");
 }
-function readAdapterImage(env: NodeJS.ProcessEnv, name: "CODEX" | "PI" | "CLAUDE"): SandboxImage | undefined { const image = env[`FRIDAY_SANDBOX_${name}_IMAGE`]; const imageId = env[`FRIDAY_SANDBOX_${name}_IMAGE_ID`]; if ((image === undefined || image === "") && (imageId === undefined || imageId === "")) return undefined; if (typeof image !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}(?::[A-Za-z0-9._-]{1,128})?$/.test(image) || typeof imageId !== "string" || !IMAGE_ID.test(imageId)) throw new Error(`FRIDAY_SANDBOX_${name}_IMAGE and FRIDAY_SANDBOX_${name}_IMAGE_ID must be an immutable pair`); return { image, imageId }; }
-function imageFor(config: SandboxdConfig, tool: JobSpecV2["tool"]): SandboxImage { if (tool === "diagnostic") return { image: config.image, imageId: config.imageId }; if (tool === "codex") { if (config.codexImage === undefined) throw new Error("Codex sandbox adapter is not configured"); return config.codexImage; } if (tool === "pi") { if (config.piImage === undefined) throw new Error("Pi sandbox adapter is not configured"); return config.piImage; } if (tool === "claude") { if (config.claudeImage === undefined) throw new Error("Claude sandbox adapter is not configured"); return config.claudeImage; } throw new Error("Sandbox tool is unsupported"); }
+function readAdapterImage(env: NodeJS.ProcessEnv, name: "AGENT" | "CODEX" | "PI" | "CLAUDE"): SandboxImage | undefined { const image = env[`FRIDAY_SANDBOX_${name}_IMAGE`]; const imageId = env[`FRIDAY_SANDBOX_${name}_IMAGE_ID`]; if ((image === undefined || image === "") && (imageId === undefined || imageId === "")) return undefined; if (typeof image !== "string" || !/^[a-z0-9][a-z0-9._/-]{0,255}(?::[A-Za-z0-9._-]{1,128})?$/.test(image) || typeof imageId !== "string" || !IMAGE_ID.test(imageId)) throw new Error(`FRIDAY_SANDBOX_${name}_IMAGE and FRIDAY_SANDBOX_${name}_IMAGE_ID must be an immutable pair`); return { image, imageId }; }
+function imageFor(config: SandboxdConfig, tool: JobSpecV2["tool"]): SandboxImage { if (tool === "agent") { if (config.agentImage === undefined) throw new Error("Remote Agent sandbox adapter is not configured"); return config.agentImage; } if (tool === "codex") { if (config.codexImage === undefined) throw new Error("Codex sandbox adapter is not configured"); return config.codexImage; } if (tool === "pi") { if (config.piImage === undefined) throw new Error("Pi sandbox adapter is not configured"); return config.piImage; } if (tool === "claude") { if (config.claudeImage === undefined) throw new Error("Claude sandbox adapter is not configured"); return config.claudeImage; } throw new Error("Sandbox tool is unsupported"); }
 // Both managed images define a fixed ENTRYPOINT. Docker appends this array to
 // that entrypoint, so repeating the executable here would shift the Agent tool
 // argument and silently turn a real canary into an invalid launch.
-function commandFor(tool: JobSpecV2["tool"]): readonly string[] { return tool === "diagnostic" ? [] : [tool]; }
+function commandFor(tool: JobSpecV2["tool"]): readonly string[] { return [tool]; }
 
 function validateModelAccess(config: SandboxdConfig, spec: JobSpecV2, grant: RunnerModelAccessGrantV2 | undefined): void {
-  if (spec.tool === "diagnostic") { if (grant !== undefined) throw new Error("Diagnostic Job must not receive model access"); return; }
   if (config.hubUrl === undefined || config.modelRelayDirectory === undefined) throw new Error("Agent model relay is not configured");
   if (grant === undefined || Object.keys(grant).length !== 9 || grant.protocolVersion !== JOB_PROTOCOL_VERSION || grant.jobId !== spec.jobId || grant.runnerId !== spec.runnerId || grant.leaseId !== spec.leaseId || grant.tool !== spec.tool || !/^[A-Za-z0-9_-]{43}$/.test(grant.accessToken) || !/^[A-Za-z0-9._:/-]{1,256}$/.test(grant.model)) throw new Error("Job model access grant does not match the signed assignment");
-  if ((spec.tool === "claude" && grant.provider !== "anthropic") || ((spec.tool === "codex" || spec.tool === "pi") && grant.provider !== "openai")) throw new Error("Job model provider does not match the sandbox adapter");
+  if ((spec.tool === "claude" && grant.provider !== "anthropic") || ((spec.tool === "agent" || spec.tool === "codex" || spec.tool === "pi") && grant.provider !== "openai")) throw new Error("Job model provider does not match the sandbox adapter");
   const expiresAt = Date.parse(grant.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.parse(spec.leaseExpiresAt)) throw new Error("Job model access grant is expired or exceeds the signed lease");
 }

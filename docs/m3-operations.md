@@ -12,9 +12,9 @@ M3 不把“可扩展”变成模型可自行安装的插件市场。所有登�
 
 ## 适配器与 Runner
 
-`/v3/runner-adapters` 仅能给**已登记、未吊销**的 Runner 固定 `codex-app-server`、`pi-rpc` 或 `claude-code` 兼容能力名及不可变 `sha256:` 镜像 ID。能力名为协议兼容标识；当前执行实现分别是固定的 Codex `exec`、Pi `--mode json --print` 和 Claude `--print` wrapper。登记后默认禁用，Owner 显式 enable。M4 Fleet 调度器和 Pi 的 `fleet_status` 只会显示这些已启用适配器；只有诊断 fixture 不会再被当成 Agent 能力。Sandbox Supervisor 还必须配置对应 `FRIDAY_SANDBOX_CODEX_*`、`PI_*` 或 `CLAUDE_*` 固定镜像对，否则即使 Hub 误配也会拒绝执行。
+`/v3/runner-adapters` 仅能给**已登记、未吊销**的 Runner 固定 `remote-agent`、`codex-app-server`、`pi-rpc` 或 `claude-code` 兼容能力名及不可变 `sha256:` 镜像 ID。`remote-agent` 是通用规划运行时，通过 Hub 逐次授权的 Node Tool Call 操作目标节点；其余三项是专业执行器。登记后默认禁用，Owner 显式 enable。生产调度不再接受 diagnostic fixture。
 
-该记录是对现有 root-owned `friday-sandboxd` 的额外准入清单，不给 Runner Docker socket、Root 或宿主机执行权限。没有经过验证的镜像、隔离后端和私有模型凭据时，执行仍必须拒绝。Agent 镜像在构建时会实际启动三个精确版本 CLI，并验证 Codex `/responses`、Pi `/chat/completions` 与 Claude `/v1/messages` 请求。每个新部署仍需用自己的私有 Provider 配置完成远端 E2E，不能用 Registry enable 或 build fixture 代替。
+该记录是对现有 root-owned `friday-sandboxd` 的额外准入清单，不给 Runner Docker socket、Root 或宿主机执行权限。没有经过验证的镜像、隔离后端和私有模型凭据时，执行仍必须拒绝。Agent 镜像在构建时会实际启动三个精确版本 CLI，并用受控模型 fixture 验证 Codex `/responses`、Pi `/chat/completions` 与 Claude `/v1/messages` 请求。每个新部署仍需用自己的私有 Provider 配置完成只读 Remote Agent E2E，不能用 Registry enable 或 build fixture 代替。
 
 ## Procedure / Skill
 

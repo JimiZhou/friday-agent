@@ -3,7 +3,7 @@ import { isAbsolute, join, relative } from "node:path";
 
 import type { PreparedWorktree } from "./worktree-manager.js";
 
-export const CODEX_ADAPTER_VERSION = "0.1.0";
+export const CODEX_ADAPTER_VERSION = "0.2.0";
 export const CODEX_EXECUTION_DISABLED = "CODEX_EXECUTION_DISABLED";
 
 export interface CodexLaunchPlan {

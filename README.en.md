@@ -4,14 +4,14 @@ English | [中文](README.md)
 
 Friday Agent is a single-owner, self-hosted steward for private devices. You talk to it through the Web UI, WeChat iLink, or Telegram. The Hub owns identity, policy, audit, and scheduling; lightweight Runners execute approved jobs on managed nodes. Models never receive general SSH, root, the Docker socket, or long-lived provider credentials.
 
-> Current release: `v0.1.1`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
+> Current release: `v0.2.0`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
 
 ## What it does
 
 - Provides a Web console for chat, devices, jobs, diffs, artifacts, and clearance requests.
 - Accepts text, images, and short videos, plus continuous browser speech recognition, read-aloud replies, and barge-in where supported.
 - Sends and receives paired private chats through WeChat iLink and one-owner Telegram Bots. When a remote task completes, fails, or is cancelled, the Gateway durably retries delivery of its terminal state and bounded result summary.
-- Selects an enrolled, online, capability-matched node and runs pinned Codex, Pi, or Claude Code inside an isolated Git worktree and no-network sandbox.
+- Selects an enrolled, online, capability-matched node. The general Remote Agent gets a per-Job runtime directory, while Codex, Pi, and Claude Code get isolated Git worktrees; both enter a no-network sandbox.
 - Exposes bounded web search to the Hub. MCP, Skills, and Procedures remain disabled until their source, version, capabilities, and replay evidence are approved.
 - Allows an external model to propose Pi upgrades and architecture changes, but only as isolated patches with test evidence. Networked installs, restarts, deployments, credentials, root access, and deletion require an R2/R3 clearance that explains context, risk, and rollback.
 
@@ -21,6 +21,7 @@ Friday Agent is a single-owner, self-hosted steward for private devices. You tal
 - **The Hub is the control root:** it stores policy, approvals, device identity, conversations, and audit state, and listens only on `127.0.0.1:4310`.
 - **Runners are outbound-only:** SSH is used only for initial installation and upgrades; Friday opens no management port on a node.
 - **Execution is sandboxed:** a worktree alone is not a sandbox. Real tools enter a content-pinned container through root-owned `friday-sandboxd`.
+- **General agent capability:** the Remote Agent plans with reusable system, process, service, journal, network, and bounded file tools. The Hub classifies and signs every call instead of hard-coding diagnostic scenarios.
 - **Credentials stay on the Hub:** a Runner receives a short-lived model token bound to the current signed job, never the long-lived provider key.
 - **Failure is closed:** incomplete configuration, offline devices, mismatched capabilities, expired leases, invalid signatures, and missing clearance all stop execution.
 
@@ -67,7 +68,7 @@ npm run fridayctl -- runner bootstrap node-user@managed-node.example-tailnet.ts.
   --hub-url https://friday-hub.example-tailnet.ts.net \
   --runner-name managed-node-01 \
   --service-user node-user \
-  --workspace project=/srv/friday-workspaces/project \
+  --workspace node=/srv/friday-nodes/node \
   --identity-file "$HOME/.ssh/friday_agent" \
   --dry-run
 ```
@@ -85,6 +86,8 @@ npm run fridayctl -- runner sandbox install node-user@managed-node.example-tailn
 ```
 
 The image pins and validates `@openai/codex@0.145.0`, `@earendil-works/pi-coding-agent@0.84.1`, and `@anthropic-ai/claude-code@2.1.227`. Activation rolls back on failure. `fridayctl runner upgrade` preserves the existing device identity, Hub pin, and workspace registry.
+
+`node` is a local capability label for that managed node; its path only needs to be an existing controlled directory and does not need Git. Source workspaces sent to Codex, Pi, or Claude must still be Git repository roots. The Remote Agent plans with reusable structured tools, cannot claim completion before receiving a real node observation, and can treat an individual tool failure as evidence before re-planning. An R1-R3 call durably checkpoints the bounded observation history, notifies iLink/Telegram, and waits for exact Web clearance. If the lease expires first, Friday never executes the old call and instead asks the Agent to re-plan under a fresh lease.
 
 ## Without Tailscale
 
@@ -125,8 +128,8 @@ More detail:
 
 ## Status and license
 
-The validated core covers Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, browser talk, real sandboxed Codex/Pi/Claude calls, short-lived credential proxying, and Self Improvement test evidence with R2/R3 clearance and canary gates.
+The validated core covers Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, browser talk, a general Remote Agent with per-call Node Tool policy, sandbox HTTP contracts for pinned Codex/Pi/Claude CLIs, a multi-step loop with real node tools, short-lived credential proxying, and Self Improvement test evidence with R2/R3 clearance and canary gates. Public tests use a controlled model fixture; every production deployment must still complete a read-only Remote Agent E2E with its own provider.
 
-`v0.1.1` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
+`v0.2.0` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
 
 Licensed under the [Apache License 2.0](LICENSE). Friday Agent is not affiliated with or endorsed by WeChat, Telegram, OpenAI, Anthropic, or the Pi project; external services remain subject to their own terms.

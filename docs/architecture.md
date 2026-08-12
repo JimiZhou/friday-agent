@@ -8,7 +8,7 @@
 
 ## 1. 产品定义
 
-Friday Agent 是一个只服务于一位 Owner 的自托管 Agent 控制面。它把 Web、Telegram、微信 iLink 和语音中的自然语言意图，转换为可审计、可审批、可恢复的远程任务，并通过受控 Runner 调用其他机器上的 Codex、Claude Code、Pi 或诊断工具。
+Friday Agent 是一个只服务于一位 Owner 的自托管 Agent 控制面。它把 Web、Telegram、微信 iLink 和语音中的自然语言意图，转换为可审计、可审批、可恢复的远程任务。通用 Remote Agent 可自主规划并组合节点工具；Codex、Claude Code、Pi 是可选的专业执行器，不再按每个诊断场景增加硬编码适配。
 
 Friday 不是通用聊天平台，也不是让大模型直接持有 SSH、Root 和生产密钥的“万能机器人”。系统的根本边界是：
 
@@ -138,7 +138,7 @@ Pi Worker 的约束：
 
 Runner 安装在受控开发机或服务器上，主动连接 Hub；Hub 不要求目标机开放 Friday RPC 端口。首选 Tailnet 内 HTTPS，替代模式使用用户已有的私网 TLS 入口。Tailscale 只提供网络与节点身份，Runner 仍必须校验 Hub pin、签名 JobSpec、租约和本机策略。
 
-当前 Runner 已使用逐设备 Ed25519 身份、出站 HTTPS、签名租约、私有 Workspace 注册表、受限 Git Worktree 和 root-owned Sandbox 接口。Owner 签发十分钟、一次性的登记令牌；`fridayctl` 可通过已知 SSH 主机完成 Linux 节点预检、编译产物下发和首次登记，Token 以 `0600` 文件交接并在成功后删除。SSH 不进入日常 Job 协议。
+当前 Runner 已使用逐设备 Ed25519 身份、出站 HTTPS、签名租约、私有 Workspace 注册表、Remote Agent 临时运行目录、专业执行器 Git Worktree 和 root-owned Sandbox 接口。Owner 签发十分钟、一次性的登记令牌；`fridayctl` 可通过已知 SSH 主机完成 Linux 节点预检、编译产物下发和首次登记，Token 以 `0600` 文件交接并在成功后删除。SSH 不进入日常 Job 协议。
 
 M4 Fleet 调度器允许 Job 请求只描述 Workspace 与工具，由 Hub 在已登记、在线、非降级、具备 `sandbox` capability、Workspace 匹配且适配器已由 Owner 启用的 Runner 中选择当前负载最低者。选择结果立即固化为明确 `runner_id` 并进入签名 JobSpec；调度器不能启用适配器、安装 Sandbox、修改 Workspace 或放宽审批。Runner-only SSH bootstrap 因未安装 Sandbox 而只会上线，不会成为可执行候选。
 
@@ -148,9 +148,11 @@ M4 Fleet 调度器允许 Job 请求只描述 Workspace 与工具，由 Hub 在�
 - `workspace_id -> canonical root` 的本地登记表；JobSpec 不允许提交任意绝对路径。
 - 支持的 Sandbox 等级、工具适配器、网络策略和资源上限。
 - 持久执行日志、步骤 Checkpoint、`job_id + attempt` 幂等记录。
-- Codex/Pi/Claude 的固定非交互 CLI 适配器，以及受控诊断工具。
+- Remote Agent Runtime、通用 Node Tool Broker，以及 Codex/Pi/Claude 固定非交互专业适配器。
 
-Runner 必须先解析并校验真实路径，再创建独立 Git Worktree 或临时 Workspace。当前实现将 Workspace 注册表与 Worktree 限定在 `FRIDAY_RUNNER_STATE_DIR/jobs/<job_id>/worktree`，并把非诊断 Job 交给 root-owned `friday-sandboxd`。Supervisor 只启动固定内容 ID 的无网络容器：Codex 使用 `codex exec --json` + Responses，Pi 使用 `--mode json --print` + Chat Completions，Claude 使用 `--print --output-format stream-json` + Messages。每个 Job 只有一个只读 Unix 模型 socket；长期 Provider Key 留在 Hub，短期令牌只在 sandboxd 内存中。缺少签名、有效租约、镜像、对应 Provider 或 Sandbox 时一律拒绝，不能静默退化到宿主进程。
+Runner 必须先解析并校验真实路径，再创建独立 Git Worktree 或临时 Workspace。当前实现把两者都限定在 `FRIDAY_RUNNER_STATE_DIR/jobs/<job_id>/worktree`：Remote Agent 的节点能力目录不要求 Git，Codex/Pi/Claude 的源码 Workspace 仍要求 Git 顶层目录。模型运行时交给 root-owned `friday-sandboxd`。Supervisor 只启动固定内容 ID 的无网络容器：Remote Agent/Pi 使用 JSON 输出 + Chat Completions，Codex 使用 `codex exec --json` + Responses，Claude 使用 `--print --output-format stream-json` + Messages。Remote Agent 只能提出结构化 Node Tool Call；Hub 按能力逐次计算 R0-R3、绑定参数摘要并签名，Runner 再验签后调用本地通用工具。暂停时 Runner 以 `0600` Checkpoint 保存完整有界观察链、待授权调用和下一事件序号；审批超出租约时旧调用作废，Agent 在新租约下重新规划。每个 Job 只有一个只读 Unix 模型 socket；长期 Provider Key 留在 Hub，短期令牌只在 sandboxd 内存中。
+
+第一版通用工具包括系统快照、进程列表、服务状态、Journal、监听端口、受限文件读取与搜索。它们不是“资源诊断”“日志诊断”等场景 API，Agent 可根据任意目标组合调用。Remote Agent 至少取得一次真实节点观察后才可 `finish`；单个已授权工具的本地失败会作为有界观察返回，使模型可以改用其他安全原语，而授权验签或控制面失败仍会关闭任务。观察链按步数、单次字节数和 Checkpoint 总量设限。文件工具拒绝进程环境、凭据、私钥和 Friday/Tailscale 等敏感路径；递归搜索先筛选有界候选文件，所有文本结果再做凭据脱敏。`file.write`、`service.restart`、`process.signal`、`command.exec`、`file.delete` 等能力已经进入协议和策略分级，但副作用执行默认关闭；需要时必须先展示精确调用背景，经 Web clearance 后再逐项开放。绑定 IM 的任务在暂停时会进入独立 clearance outbox，主动提示 Owner 去 Web 授权，不会占用最终结果通知。
 
 Runner 的本机策略可以比 Hub 更严格，不能更宽松。SSH 仅作为无法安装 Runner 时由 Owner 显式启用的 break-glass 路径，不属于常规执行协议。
 
@@ -359,7 +361,7 @@ Friday 对自身的迭代只允许从 `FRIDAY_SELF_WORKSPACE_ID` 指定的源码
 
 范围：SSH 首次部署轻量 Runner、Runner-only 可复现发布包、一次性文件式登记、确定性多节点选择、节点能力/负载可见性。
 
-当前已实现：Linux/systemd SSH bootstrap、编译产物发布包、自动选择 API、私有图片/视频存储与多模态 Pi 输入、浏览器连续对讲，以及 `fridayctl runner sandbox install` 的联网镜像构建、真实 CLI 合约门禁和失败自动回滚。参考 Linux Hub/Runner 已完成 R2 部署和三种 CLI E2E。尚未实现 macOS/Windows 安装器、通用设备诊断 Procedure和自建 WebRTC 音频流。
+当前已实现：Linux/systemd SSH bootstrap、编译产物发布包、自动选择 API、私有图片/视频存储与多模态 Pi 输入、浏览器连续对讲、通用 Remote Agent/Node Tool 协议，以及 `fridayctl runner sandbox install` 的联网镜像构建、真实 CLI 合约门禁和失败自动回滚。尚未实现 macOS/Windows 安装器、高风险通用工具的实际副作用执行和自建 WebRTC 音频流。
 
 验收：
 

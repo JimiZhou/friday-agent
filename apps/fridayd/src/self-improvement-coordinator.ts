@@ -75,7 +75,7 @@ export class SelfImprovementJobRegistry {
       }
       return { binding: existing, duplicate: true };
     }
-    if (job.risk !== "R1" || job.operation !== "develop" || job.tool === "diagnostic" || job.status !== "WAIT_APPROVAL") {
+    if (job.risk !== "R1" || job.operation !== "develop" || job.tool === "agent" || job.status !== "WAIT_APPROVAL") {
       throw new Error("Self improvement must be bound to a new R1 develop Job before execution");
     }
     const now = new Date().toISOString();
@@ -183,7 +183,7 @@ export class SelfImprovementCoordinator {
   }
 
   async #promote(binding: SelfImprovementJobView, job: JobViewV2): Promise<SelfImprovementPromotionResult> {
-    if (job.risk !== "R1" || job.operation !== "develop" || job.tool === "diagnostic" || job.spec === undefined) throw new PromotionValidationError("SOURCE_JOB_INVALID");
+    if (job.risk !== "R1" || job.operation !== "develop" || job.tool === "agent" || job.spec === undefined) throw new PromotionValidationError("SOURCE_JOB_INVALID");
     const events = this.jobs.listEvents(job.jobId);
     const patchArtifacts = artifactEvents(events, "changes.diff", "text/x-diff");
     const evidenceArtifacts = artifactEvents(events, "test-evidence.json", "application/json");

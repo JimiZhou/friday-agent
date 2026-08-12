@@ -34,7 +34,8 @@ export interface JobViewV2 {
   readonly idempotencyKey: string;
   readonly runnerId: string;
   readonly workspaceId: string;
-  readonly tool: JobToolV2;
+  /** `diagnostic` is exposed only when reading pre-Agent historical rows. */
+  readonly tool: JobToolV2 | "diagnostic";
   readonly operation: "develop" | "diagnose" | "review" | "test";
   readonly risk: JobRiskLevelV2;
   readonly status: JobExecutionStateV2;
@@ -50,6 +51,8 @@ export interface JobEventView {
   readonly recordedAt: string;
   readonly event: RunnerJobEventV2;
 }
+
+export type AgentRecoveryDisposition = "READY" | "HOLD" | "DISCARD";
 
 export type JobIdempotencyResult =
   | { readonly outcome: "new" }
@@ -125,7 +128,9 @@ export class SqliteJobRegistry {
         if (!sameJobRequest(stored, input, input.runnerId)) throw new Error("idempotencyKey is already bound to a different Job request");
         return { job: this.#toView(stored), duplicate: true };
       }
-      const risk: JobRiskLevelV2 = input.tool === "diagnostic" ? "R0" : "R1";
+      // A general remote Agent starts with inference-only R0 authority. Every
+      // node tool call is classified and authorized separately by the Hub.
+      const risk: JobRiskLevelV2 = input.tool === "agent" ? "R0" : "R1";
       const status: JobExecutionStateV2 = risk === "R0" ? "DISPATCHED" : "WAIT_APPROVAL";
       const createdAt = now.toISOString();
       const jobId = randomUUID();
@@ -144,11 +149,54 @@ export class SqliteJobRegistry {
     const database = this.#requireDatabase();
     return this.#transaction(database, () => {
       const job = this.#readStored(jobId);
-      if (job.status !== "WAIT_APPROVAL" || job.risk !== "R1") throw new Error("Job is not awaiting R1 approval");
-      const spec = this.#signSpec({ ...job, createdAt: job.createdAt });
+      if (job.status !== "WAIT_APPROVAL" || job.risk !== "R1" || !isTool(job.tool)) throw new Error("Job is not awaiting R1 approval");
+      const spec = this.#signSpec({ ...job, tool: job.tool, createdAt: job.createdAt }, now);
       const updatedAt = now.toISOString();
       database.prepare("UPDATE jobs_v2 SET status = 'DISPATCHED', spec_json = ?, updated_at = ? WHERE job_id = ? AND status = 'WAIT_APPROVAL'")
         .run(JSON.stringify(spec), updatedAt, jobId);
+      return this.#readJob(jobId);
+    });
+  }
+
+  waitForToolApproval(jobId: string, runnerId: string, leaseId: string, now = new Date()): JobViewV2 {
+    requireUuid(jobId, "jobId"); requireUuid(runnerId, "runnerId"); requireUuid(leaseId, "leaseId");
+    const database = this.#requireDatabase();
+    return this.#transaction(database, () => {
+      const job = this.#readStored(jobId);
+      if (job.runnerId !== runnerId || job.spec?.leaseId !== leaseId || job.tool !== "agent") throw new Error("Job is not bound to this remote Agent tool lease");
+      if (Date.parse(job.spec.leaseExpiresAt) <= now.getTime()) throw new Error("Job tool approval lease expired");
+      if (job.status === "WAIT_APPROVAL") return this.#toView(job);
+      // DISPATCHED is accepted only to repair the crash window where the Hub
+      // persisted the pending call but restarted before persisting the hold.
+      if (job.status !== "RUNNING" && job.status !== "DISPATCHED") throw new Error("Job cannot wait for tool approval from its current state");
+      database.prepare("UPDATE jobs_v2 SET status='WAIT_APPROVAL', updated_at=? WHERE job_id=? AND status IN ('RUNNING','DISPATCHED')").run(now.toISOString(), jobId);
+      return this.#readJob(jobId);
+    });
+  }
+
+  dispatchAfterToolApproval(jobId: string, runnerId: string, leaseId: string, now = new Date()): JobViewV2 {
+    requireUuid(jobId, "jobId"); requireUuid(runnerId, "runnerId"); requireUuid(leaseId, "leaseId");
+    const database = this.#requireDatabase();
+    return this.#transaction(database, () => {
+      const job = this.#readStored(jobId);
+      if (job.runnerId !== runnerId || job.spec?.leaseId !== leaseId || job.status !== "WAIT_APPROVAL" || job.tool !== "agent") throw new Error("Job is not awaiting tool clearance");
+      if (Date.parse(job.spec.leaseExpiresAt) <= now.getTime()) throw new Error("Job tool approval lease expired");
+      database.prepare("UPDATE jobs_v2 SET status='DISPATCHED', updated_at=? WHERE job_id=? AND status='WAIT_APPROVAL'").run(now.toISOString(), jobId);
+      return this.#readJob(jobId);
+    });
+  }
+
+  redispatchAfterDeniedToolCall(jobId: string, runnerId: string, leaseId: string, now = new Date()): JobViewV2 {
+    requireUuid(jobId, "jobId"); requireUuid(runnerId, "runnerId"); requireUuid(leaseId, "leaseId");
+    const database = this.#requireDatabase();
+    return this.#transaction(database, () => {
+      const job = this.#readStored(jobId);
+      if (job.runnerId !== runnerId || job.spec?.leaseId !== leaseId || job.status !== "WAIT_APPROVAL" || job.tool !== "agent") throw new Error("Job is not awaiting a denied tool call");
+      const renewed = Date.parse(job.spec.leaseExpiresAt) <= now.getTime()
+        ? this.#signSpec({ ...job, tool: "agent", createdAt: job.createdAt }, now)
+        : job.spec;
+      database.prepare("UPDATE jobs_v2 SET status='DISPATCHED', spec_json=?, updated_at=? WHERE job_id=? AND status='WAIT_APPROVAL'")
+        .run(JSON.stringify(renewed), now.toISOString(), jobId);
       return this.#readJob(jobId);
     });
   }
@@ -157,17 +205,41 @@ export class SqliteJobRegistry {
     requireUuid(runnerId, "runnerId");
     const database = this.#requireDatabase();
     return this.#transaction(database, () => {
-      const row = database.prepare("SELECT * FROM jobs_v2 WHERE runner_id = ? AND status = 'DISPATCHED' ORDER BY created_at LIMIT 1").get(runnerId) as unknown;
+      const row = database.prepare("SELECT * FROM jobs_v2 WHERE runner_id = ? AND status = 'DISPATCHED' AND tool <> 'diagnostic' ORDER BY created_at LIMIT 1").get(runnerId) as unknown;
       if (!isRecord(row)) return undefined;
       const job = this.#toStored(row);
       const spec = job.spec;
       if (spec === undefined) throw new Error("Dispatched job has no signed spec");
       if (Date.parse(spec.leaseExpiresAt) <= now.getTime()) {
-        const renewed = this.#signSpec({ ...job, createdAt: job.createdAt });
+        if (!isTool(job.tool)) throw new Error("Historical diagnostic Jobs cannot be renewed");
+        const renewed = this.#signSpec({ ...job, tool: job.tool, createdAt: job.createdAt }, now);
         database.prepare("UPDATE jobs_v2 SET spec_json = ?, updated_at = ? WHERE job_id = ?").run(JSON.stringify(renewed), now.toISOString(), job.jobId);
         return renewed;
       }
       return spec;
+    });
+  }
+
+  recoverAgent(jobId: string, runnerId: string, checkpointLeaseId: string, now = new Date()): { readonly disposition: AgentRecoveryDisposition; readonly job: JobViewV2 } {
+    requireUuid(jobId, "jobId"); requireUuid(runnerId, "runnerId"); requireUuid(checkpointLeaseId, "checkpointLeaseId");
+    const database = this.#requireDatabase();
+    return this.#transaction(database, () => {
+      const job = this.#readStored(jobId);
+      if (job.runnerId !== runnerId || job.tool !== "agent" || job.spec === undefined) throw new Error("Remote Agent checkpoint does not match this Runner Job");
+      if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(job.status)) return { disposition: "DISCARD", job: this.#toView(job) };
+      if (job.status === "WAIT_APPROVAL") return { disposition: "HOLD", job: this.#toView(job) };
+      if (job.status === "DISPATCHED") return { disposition: "READY", job: this.#toView(job) };
+      if (job.status !== "RUNNING" || job.spec.leaseId !== checkpointLeaseId) throw new Error("Remote Agent Job is not recoverable from this checkpoint lease");
+      const timestamp = now.toISOString();
+      if (Date.parse(job.spec.leaseExpiresAt) <= now.getTime()) {
+        const renewed = this.#signSpec({ ...job, tool: "agent", createdAt: job.createdAt }, now);
+        database.prepare("UPDATE jobs_v2 SET status='DISPATCHED', spec_json=?, updated_at=? WHERE job_id=? AND status='RUNNING'")
+          .run(JSON.stringify(renewed), timestamp, jobId);
+      } else {
+        database.prepare("UPDATE jobs_v2 SET status='DISPATCHED', updated_at=? WHERE job_id=? AND status='RUNNING'")
+          .run(timestamp, jobId);
+      }
+      return { disposition: "READY", job: this.#readJob(jobId) };
     });
   }
 
@@ -218,6 +290,14 @@ export class SqliteJobRegistry {
     const job = this.#readStored(jobId);
     if (job.runnerId !== runnerId || job.spec?.leaseId !== leaseId || Date.parse(job.spec.leaseExpiresAt) < now.getTime()) throw new Error("Job lease is invalid or expired");
     if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(job.status)) throw new Error("Terminal jobs cannot upload artifacts");
+  }
+
+  assertBoundLease(jobId: string, runnerId: string, leaseId: string, now = new Date()): JobSpecV2 {
+    requireUuid(jobId, "jobId"); requireUuid(runnerId, "runnerId"); requireUuid(leaseId, "leaseId");
+    const job = this.#readStored(jobId);
+    if (job.runnerId !== runnerId || job.spec?.leaseId !== leaseId || job.tool !== "agent" || job.status !== "WAIT_APPROVAL") throw new Error("Job is not bound to this pending node tool lease");
+    if (Date.parse(job.spec.leaseExpiresAt) <= now.getTime()) throw new Error("Job tool approval lease expired");
+    return job.spec;
   }
 
   cancel(jobId: string, now = new Date()): JobViewV2 {
@@ -280,9 +360,8 @@ export class SqliteJobRegistry {
       });
   }
 
-  #signSpec(input: Omit<StoredJob, "status" | "updatedAt" | "lastSequence" | "spec"> | (JobCreateInput & { jobId: string; risk: JobRiskLevelV2; limits: JobLimitsV2; createdAt: string })): JobSpecV2 {
+  #signSpec(input: (Omit<StoredJob, "status" | "updatedAt" | "lastSequence" | "spec" | "tool"> & { readonly tool: JobToolV2 }) | (JobCreateInput & { jobId: string; risk: JobRiskLevelV2; limits: JobLimitsV2; createdAt: string }), now = new Date()): JobSpecV2 {
     const leaseId = randomUUID();
-    const now = new Date();
     const draft = {
       protocolVersion: JOB_PROTOCOL_VERSION,
       jobId: input.jobId,
@@ -329,7 +408,9 @@ export class SqliteJobRegistry {
     const status = string("status") as JobExecutionStateV2;
     if (!isRisk(risk) || !isState(status)) throw new Error("Stored job state is invalid");
     const tool = string("tool"); const operation = string("operation");
-    if (!isTool(tool) || !["develop", "diagnose", "review", "test"].includes(operation)) throw new Error("Stored job action is invalid");
+    // v0.1.1 and earlier persisted diagnostic fixture Jobs. They remain
+    // readable/auditable but can never be newly created, approved, or pulled.
+    if (!isStoredTool(tool) || !["develop", "diagnose", "review", "test"].includes(operation)) throw new Error("Stored job action is invalid");
     const limits = JSON.parse(string("limits_json")) as JobLimitsV2;
     validateLimits(limits);
     const specRaw = row.spec_json;
@@ -349,8 +430,9 @@ function validateCreateInput(input: JobCreateInput): void { requireUuid(input.id
 function normalizeLimits(value: Partial<JobLimitsV2> | undefined): JobLimitsV2 { const limits = { timeoutSeconds: value?.timeoutSeconds ?? 900, maxOutputBytes: value?.maxOutputBytes ?? 1_048_576, cpuMillis: value?.cpuMillis ?? 1000, memoryMiB: value?.memoryMiB ?? 1024 }; validateLimits(limits); return limits; }
 function validateLimits(value: JobLimitsV2): void { if (!Number.isSafeInteger(value.timeoutSeconds) || value.timeoutSeconds < 1 || value.timeoutSeconds > 3600 || !Number.isSafeInteger(value.maxOutputBytes) || value.maxOutputBytes < 1024 || value.maxOutputBytes > 67_108_864 || !Number.isSafeInteger(value.cpuMillis) || value.cpuMillis < 100 || value.cpuMillis > 4000 || !Number.isSafeInteger(value.memoryMiB) || value.memoryMiB < 128 || value.memoryMiB > 8192) throw new Error("Job limits are invalid"); }
 function isRisk(value: string): value is JobRiskLevelV2 { return value === "R0" || value === "R1" || value === "R2" || value === "R3"; }
-function isTool(value: string): value is JobToolV2 { return value === "codex" || value === "pi" || value === "claude" || value === "diagnostic"; }
+function isTool(value: string): value is JobToolV2 { return value === "agent" || value === "codex" || value === "pi" || value === "claude"; }
+function isStoredTool(value: string): value is JobViewV2["tool"] { return value === "diagnostic" || isTool(value); }
 function isState(value: string): value is JobExecutionStateV2 { return ["NEW", "PLANNING", "WAIT_APPROVAL", "DISPATCHED", "RUNNING", "WAIT_USER", "UNKNOWN", "RECONCILING", "SUCCEEDED", "FAILED", "CANCELLED"].includes(value); }
-function transition(current: JobExecutionStateV2, next: JobExecutionStateV2): JobExecutionStateV2 { const allowed: Readonly<Record<JobExecutionStateV2, readonly JobExecutionStateV2[]>> = { NEW: ["PLANNING", "CANCELLED"], PLANNING: ["WAIT_APPROVAL", "DISPATCHED", "FAILED", "CANCELLED"], WAIT_APPROVAL: ["DISPATCHED", "CANCELLED"], DISPATCHED: ["RUNNING", "UNKNOWN", "CANCELLED"], RUNNING: ["WAIT_USER", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN", "RECONCILING"], WAIT_USER: ["RUNNING", "CANCELLED", "UNKNOWN"], UNKNOWN: ["RECONCILING", "CANCELLED"], RECONCILING: ["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"], SUCCEEDED: [], FAILED: [], CANCELLED: [] }; if (current === next || !allowed[current].includes(next)) throw new Error(`Invalid job transition ${current} -> ${next}`); return next; }
+function transition(current: JobExecutionStateV2, next: JobExecutionStateV2): JobExecutionStateV2 { const allowed: Readonly<Record<JobExecutionStateV2, readonly JobExecutionStateV2[]>> = { NEW: ["PLANNING", "CANCELLED"], PLANNING: ["WAIT_APPROVAL", "DISPATCHED", "FAILED", "CANCELLED"], WAIT_APPROVAL: ["DISPATCHED", "RUNNING", "CANCELLED"], DISPATCHED: ["RUNNING", "UNKNOWN", "CANCELLED"], RUNNING: ["WAIT_APPROVAL", "WAIT_USER", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN", "RECONCILING"], WAIT_USER: ["RUNNING", "CANCELLED", "UNKNOWN"], UNKNOWN: ["RECONCILING", "CANCELLED"], RECONCILING: ["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"], SUCCEEDED: [], FAILED: [], CANCELLED: [] }; if (current === next || !allowed[current].includes(next)) throw new Error(`Invalid job transition ${current} -> ${next}`); return next; }
 function validateRunnerEvent(event: RunnerJobEventV2): void { if (event.protocolVersion !== JOB_PROTOCOL_VERSION) throw new Error("Unsupported job event protocol"); requireUuid(event.eventId, "eventId"); requireUuid(event.jobId, "jobId"); requireUuid(event.runnerId, "runnerId"); requireUuid(event.leaseId, "leaseId"); if (!Number.isSafeInteger(event.sequence) || event.sequence < 0) throw new Error("Runner event sequence is invalid"); if (event.type === "state" && (event.state === undefined || !isState(event.state))) throw new Error("State event is invalid"); if (event.type === "output" && (event.stream === undefined || typeof event.chunk !== "string" || event.chunk.length > 1_048_576)) throw new Error("Output event is invalid"); if (event.type === "artifact" && event.artifact === undefined) throw new Error("Artifact event is invalid"); if (event.type === "error" && event.error === undefined) throw new Error("Error event is invalid"); }
 function sameJobRequest(job: StoredJob, input: Omit<JobCreateInput, "runnerId">, runnerId?: string): boolean { const limits = normalizeLimits(input.limits); return (runnerId === undefined || job.runnerId === runnerId) && job.workspaceId === input.workspaceId && job.tool === input.tool && job.operation === input.operation && job.prompt === input.prompt && job.limits.timeoutSeconds === limits.timeoutSeconds && job.limits.maxOutputBytes === limits.maxOutputBytes && job.limits.cpuMillis === limits.cpuMillis && job.limits.memoryMiB === limits.memoryMiB; }

@@ -16,7 +16,7 @@ test("M2 Hub accepts only paired channel ingress and durable replay rejection", 
   assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({channel:"telegram",token,senderId:"owner",messageId:randomUUID(),group:false,text:"before pairing"})})).status,401);
   assert.equal((await fetch(`${base}/v2/channels/pair`,{method:"POST",headers:owner,body:JSON.stringify({channel:"telegram",senderId:"owner"})})).status,200);
   const messageId=randomUUID();const body=JSON.stringify({channel:"telegram",token,senderId:"owner",messageId,group:false,text:"hello"});assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body})).status,202);const replay=await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body});assert.equal(replay.status,202);assert.equal((await replay.json()).duplicate,true);
-  const notificationJob=server.jobRegistry.create({idempotencyKey:randomUUID(),runnerId:randomUUID(),workspaceId:"infra",tool:"diagnostic",operation:"diagnose",prompt:"inspect"}).job;server.channelOutbox.bindJob(notificationJob.jobId,"telegram","owner");assert.equal(server.channelOutbox.enqueueTerminal(notificationJob.jobId,"任务已完成。"),true);
+  const notificationJob=server.jobRegistry.create({idempotencyKey:randomUUID(),runnerId:randomUUID(),workspaceId:"infra",tool:"agent",operation:"diagnose",prompt:"inspect"}).job;server.channelOutbox.bindJob(notificationJob.jobId,"telegram","owner");assert.equal(server.channelOutbox.enqueueTerminal(notificationJob.jobId,"任务已完成。"),true);
   assert.equal((await fetch(`${base}/v2/channels/telegram/outbox`)).status,401);
   const delivery=await fetch(`${base}/v2/channels/telegram/outbox`,{headers:{authorization:`Bearer ${token}`}});assert.equal(delivery.status,200);const deliveryBody=await delivery.json();assert.equal(deliveryBody.notification.text,"任务已完成。");
   const badAck=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:randomUUID()})});assert.equal(badAck.status,409);
@@ -72,9 +72,9 @@ test("iLink adapter uses the official getupdates contract and is disabled withou
   const stateDir = await mkdtemp(join(tmpdir(), "m2-ilink-")); t.after(() => rm(stateDir, { recursive: true, force: true }));
   const config = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${port}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-ilink-token-value", FRIDAY_GATEWAY_STATE_DIR: stateDir });
   const result = await pollIlinkOnce(config, "prior-cursor", AbortSignal.timeout(1_000));
-  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.1.1", bot_agent: "FridayAgent/0.1.1" } });
+  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.2.0", bot_agent: "FridayAgent/0.2.0" } });
   assert.equal(authorizationType, "ilink_bot_token"); assert.equal(authorization, "Bearer private-ilink-token-value");
-  assert.equal(appId, "bot"); assert.equal(appClientVersion, "257");
+  assert.equal(appId, "bot"); assert.equal(appClientVersion, "512");
   assert.deepEqual(result, { nextCursor: "next-cursor", messages: [{ channel: "wechat_ilink", messageId: result.messages[0].messageId, senderId: "owner", group: false, text: "from ilink" }] });
 });
 

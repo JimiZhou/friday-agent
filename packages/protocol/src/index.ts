@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /** The wire-protocol version implemented by this package. */
 export const PROTOCOL_VERSION = "1" as const;
 
@@ -421,8 +423,12 @@ export interface JobNetworkV2 {
   allowedHosts: readonly [];
 }
 
-/** M3 adds only explicitly enabled, sandboxed execution adapters. */
-export type JobToolV2 = "codex" | "pi" | "claude" | "diagnostic";
+/**
+ * `agent` is Friday's general remote runtime. It plans against Hub-owned
+ * structured node tools; it is not a synonym for a diagnostic fixture.
+ * Codex/Pi/Claude remain optional specialist runtimes for isolated worktrees.
+ */
+export type JobToolV2 = "agent" | "codex" | "pi" | "claude";
 
 export interface JobSpecV2 {
   protocolVersion: JobProtocolVersion;
@@ -467,6 +473,72 @@ export interface RunnerJobEventV2 {
   error?: ProtocolErrorV1;
 }
 
+export type NodeToolNameV1 =
+  | "system.snapshot"
+  | "process.list"
+  | "service.status"
+  | "journal.read"
+  | "network.sockets"
+  | "file.read"
+  | "file.search"
+  | "file.write"
+  | "file.delete"
+  | "process.signal"
+  | "service.restart"
+  | "command.exec";
+
+/** Untrusted model proposal. Risk and authority are deliberately absent. */
+export interface NodeToolCallV1 {
+  readonly protocolVersion: JobProtocolVersion;
+  readonly callId: Uuid;
+  readonly jobId: Uuid;
+  readonly runnerId: Uuid;
+  readonly leaseId: Uuid;
+  readonly name: NodeToolNameV1;
+  readonly arguments: Readonly<Record<string, JsonValue>>;
+  readonly reason: string;
+  readonly requestedAt: IsoDateTime;
+}
+
+/**
+ * Exact, short-lived authority issued by the Hub after deterministic policy
+ * evaluation (and Owner clearance when required). The Runner verifies this
+ * signature before invoking a local node tool.
+ */
+export interface NodeToolAuthorizationV1 {
+  readonly protocolVersion: JobProtocolVersion;
+  readonly callId: Uuid;
+  readonly jobId: Uuid;
+  readonly runnerId: Uuid;
+  readonly leaseId: Uuid;
+  readonly callSha256: string;
+  readonly risk: JobRiskLevelV2;
+  readonly approvedBy: "policy" | string;
+  readonly approvedAt: IsoDateTime;
+  readonly expiresAt: IsoDateTime;
+  readonly hubSignature: string;
+}
+
+export interface NodeToolDecisionV1 {
+  readonly status: "APPROVED" | "WAIT_APPROVAL" | "DENIED";
+  readonly risk: JobRiskLevelV2;
+  readonly background: string;
+  readonly authorization?: NodeToolAuthorizationV1;
+}
+
+export type RemoteAgentActionV1 =
+  | {
+      readonly type: "tool_call";
+      readonly callId: Uuid;
+      readonly name: NodeToolNameV1;
+      readonly arguments: Readonly<Record<string, JsonValue>>;
+      readonly reason: string;
+    }
+  | {
+      readonly type: "finish";
+      readonly summary: string;
+    };
+
 export interface RunnerReconcileV2 {
   protocolVersion: JobProtocolVersion;
   jobId: Uuid;
@@ -488,7 +560,7 @@ export interface RunnerModelAccessRequestV2 {
   jobId: Uuid;
   runnerId: Uuid;
   leaseId: Uuid;
-  tool: Exclude<JobToolV2, "diagnostic">;
+  tool: JobToolV2;
   sentAt: IsoDateTime;
 }
 
@@ -504,7 +576,7 @@ export interface RunnerModelAccessGrantV2 {
   jobId: Uuid;
   runnerId: Uuid;
   leaseId: Uuid;
-  tool: Exclude<JobToolV2, "diagnostic">;
+  tool: JobToolV2;
   provider: RunnerModelProviderV2;
   model: string;
   expiresAt: IsoDateTime;
@@ -518,6 +590,15 @@ export function runnerRequestSignaturePayloadV2(method: string, path: string, bo
 /** Stable manifest projection used for the Hub signature and approval binding. */
 export function jobManifestProjectionV2(spec: JobSpecV2): Omit<JobSpecV2, "manifestSha256" | "hubSignature"> {
   const { manifestSha256: _digest, hubSignature: _signature, ...projection } = spec;
+  return projection;
+}
+
+export function nodeToolCallSha256V1(call: NodeToolCallV1): string {
+  return createHash("sha256").update(canonicalJsonV2(call as unknown as Record<string, unknown>)).digest("hex");
+}
+
+export function nodeToolAuthorizationProjectionV1(value: NodeToolAuthorizationV1): Omit<NodeToolAuthorizationV1, "hubSignature"> {
+  const { hubSignature: _signature, ...projection } = value;
   return projection;
 }
 

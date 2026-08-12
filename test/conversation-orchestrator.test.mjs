@@ -37,7 +37,7 @@ async function registerFleetRunner(friday, workspaceId = "infra") {
   for (const envelope of [
     {
       protocolVersion: "1", envelopeId: randomUUID(), kind: "register", runnerId, sentAt: receivedAt,
-      payload: { displayName: "private-node", version: "0.1.0", capabilities: ["orchestration", "sandbox"], workspaces: [workspaceId], shellExecution: false },
+      payload: { displayName: "private-node", version: "0.2.0", capabilities: ["orchestration", "sandbox"], workspaces: [workspaceId], shellExecution: false },
     },
     {
       protocolVersion: "1", envelopeId: randomUUID(), kind: "heartbeat", runnerId, sentAt: receivedAt,
@@ -58,7 +58,7 @@ test("conversation output schema rejects model-controlled authority fields", () 
   });
   const valid = parseConversationAgentOutput(JSON.stringify({
     reply: "我会发起只读检查。",
-    jobProposal: { workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "检查服务状态", runnerSelector: "auto" },
+    jobProposal: { workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "检查服务状态", runnerSelector: "auto" },
   }));
   assert.equal(valid.jobProposal.runnerSelector, "auto");
   const selfImprovement = parseConversationAgentOutput(JSON.stringify({
@@ -84,7 +84,7 @@ test("conversation output schema rejects model-controlled authority fields", () 
     assert.throws(() => parseConversationAgentOutput(JSON.stringify({
       reply: "unsafe",
       jobProposal: {
-        workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "inspect", runnerSelector: "auto", ...forbidden,
+        workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "inspect", runnerSelector: "auto", ...forbidden,
       },
     })), /unsupported|invalid/);
   }
@@ -248,9 +248,9 @@ test("Pi Worker client waits for agent_settled instead of treating prompt acknow
 test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-server-"));
   const outputs = [
-    JSON.stringify({ reply: "我会检查节点状态。", jobProposal: { workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "检查服务和磁盘状态", runnerSelector: "auto" } }),
+    JSON.stringify({ reply: "我会检查节点状态。", jobProposal: { workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "检查服务和磁盘状态", runnerSelector: "auto" } }),
     JSON.stringify({ reply: "我已提出代码修改任务，等待审批。", jobProposal: { workspaceId: "infra", tool: "codex", operation: "develop", prompt: "在隔离工作区完成小改动并测试", runnerSelector: "auto" } }),
-    JSON.stringify({ reply: "越界", jobProposal: { workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "inspect", runnerSelector: "auto", runnerId: randomUUID() } }),
+    JSON.stringify({ reply: "越界", jobProposal: { workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "inspect", runnerSelector: "auto", runnerId: randomUUID() } }),
   ];
   const agent = {
     calls: [],
@@ -264,6 +264,8 @@ test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent"
   );
   t.after(async () => { await friday.stop(); await rm(stateDir, { recursive: true, force: true }); });
   const runnerId = await registerFleetRunner(friday);
+  friday.adapterRegistry.register({ runnerId, adapter: "remote-agent", image: "friday-agent:0.1.0", imageId: `sha256:${"a".repeat(64)}` });
+  friday.adapterRegistry.enable(runnerId, "remote-agent");
   friday.adapterRegistry.register({ runnerId, adapter: "codex-app-server", image: "friday-codex:0.145.0", imageId: `sha256:${"c".repeat(64)}` });
   friday.adapterRegistry.enable(runnerId, "codex-app-server");
   const address = await friday.start();

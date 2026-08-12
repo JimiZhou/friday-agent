@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
+import { randomUUID } from "node:crypto";
 
 import {
   CodexAppServerAdapter,
@@ -92,6 +93,25 @@ test("Git worktree preparation is limited to a registered repository and Runner 
   assert.match(worktree.commit, /^[0-9a-f]{40}$/);
   assert.equal(await readFile(join(worktree.path, "README.md"), "utf8"), "safe worktree fixture\n");
   await assert.rejects(() => manager.prepare("fixture", jobId), /reconcile instead of replacing it/);
+});
+
+test("Remote Agent runtime is isolated per Job and does not require a Git workspace", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "friday-agent-runtime-state-"));
+  const nodeRoot = await mkdtemp(join(tmpdir(), "friday-agent-runtime-node-"));
+  t.after(async () => {
+    await rm(stateDir, { recursive: true, force: true });
+    await rm(nodeRoot, { recursive: true, force: true });
+  });
+  const registry = new RunnerWorkspaceRegistry(stateDir);
+  registry.register("node", nodeRoot);
+  const manager = new GitWorktreeManager(stateDir, registry);
+  const jobId = randomUUID();
+  const runtime = manager.prepareAgentRuntime("node", jobId);
+  assert.equal(runtime.path, await realpath(join(stateDir, "jobs", jobId, "worktree")));
+  assert.equal(runtime.commit, "node-agent-runtime-v1");
+  assert.equal((await stat(runtime.path)).mode & 0o777, 0o700);
+  assert.throws(() => manager.prepareAgentRuntime("node", jobId), /reconcile/);
+  assert.equal(manager.prepareAgentRuntime("node", jobId, true).path, runtime.path);
 });
 
 test("Codex adapter produces a fixed no-network sandbox plan and cannot start without a backend", async (t) => {

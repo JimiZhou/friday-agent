@@ -97,7 +97,7 @@ export class RunnerModelAccessBroker {
     }
     this.#assertGrantActive(stored.grant, now);
     if ((stored.grant.tool === "codex" && path !== "/v1/responses" && path !== "/v1/responses/compact") ||
-        (stored.grant.tool === "pi" && path !== "/v1/chat/completions" && path !== "/v1/responses") ||
+        ((stored.grant.tool === "agent" || stored.grant.tool === "pi") && path !== "/v1/chat/completions" && path !== "/v1/responses") ||
         (stored.grant.tool === "claude" && path !== "/v1/messages" && path !== "/v1/messages/count_tokens")) {
       throw new Error("Model access token is not authorized for this tool route");
     }
@@ -148,7 +148,7 @@ export class RunnerModelAccessBroker {
   activeGrantCount(now = new Date()): number { this.#prune(now); return this.#byTokenHash.size; }
 
   #targetFor(tool: RunnerModelAccessGrantV2["tool"]): { readonly provider: RunnerModelProviderV2; readonly baseUrl: URL; readonly apiKey: string; readonly model: string } {
-    if (tool === "codex" || tool === "pi") {
+    if (tool === "agent" || tool === "codex" || tool === "pi") {
       const provider = this.#config.openai;
       if (provider === undefined) throw new Error("OpenAI-compatible Runner model proxy is not configured");
       return { provider: "openai", baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: tool === "codex" ? provider.codexModel : provider.piModel };
@@ -185,7 +185,7 @@ export function modelProxyResponseHeaders(upstream: Headers): Readonly<Record<st
 }
 
 function validateAccessRequest(request: RunnerModelAccessRequestV2, now: Date): void {
-  if (request.protocolVersion !== JOB_PROTOCOL_VERSION || !isUuid(request.requestId) || !isUuid(request.jobId) || !isUuid(request.runnerId) || !isUuid(request.leaseId) || !["codex", "pi", "claude"].includes(request.tool)) {
+  if (request.protocolVersion !== JOB_PROTOCOL_VERSION || !isUuid(request.requestId) || !isUuid(request.jobId) || !isUuid(request.runnerId) || !isUuid(request.leaseId) || !["agent", "codex", "pi", "claude"].includes(request.tool)) {
     throw new Error("Model access request is invalid");
   }
   const sentAt = Date.parse(request.sentAt);

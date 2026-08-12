@@ -115,7 +115,7 @@ function registerEnvelope(
     sentAt,
     payload: {
       displayName: "State test runner",
-      version: "0.1.0",
+      version: "0.2.0",
       capabilities: ["orchestration"],
       workspaces: ["friday-agent"],
       shellExecution: false,
@@ -230,7 +230,7 @@ test("runner envelopes are durable idempotency keys and liveness uses Hub receip
       shellExecution: false,
       workspaces: ["friday-agent"],
       capabilities: ["orchestration"],
-      version: "0.1.0",
+      version: "0.2.0",
       displayName: "State test runner",
     },
     sentAt: register.sentAt,

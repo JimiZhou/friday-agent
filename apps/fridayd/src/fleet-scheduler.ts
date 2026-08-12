@@ -54,7 +54,7 @@ export function evaluateFleetRunners(
     .map((runner) => {
       const rejections: FleetRunnerRejection[] = [];
       if (!context.isEnrolled(runner.nodeId)) rejections.push("not-enrolled");
-      if (runner.version !== "0.1.0") rejections.push("incompatible-version");
+      if (runner.version !== "0.2.0") rejections.push("incompatible-version");
       if (!runner.online) rejections.push("offline");
       else if (runner.status !== "online") rejections.push("degraded");
       if (!runner.capabilities.includes("orchestration")) rejections.push("missing-orchestration-capability");
@@ -92,6 +92,7 @@ export function selectFleetRunner(
 }
 
 export function requiredAdapter(tool: JobToolV2): SandboxAdapter | undefined {
+  if (tool === "agent") return "remote-agent";
   if (tool === "codex") return "codex-app-server";
   if (tool === "pi") return "pi-rpc";
   if (tool === "claude") return "claude-code";

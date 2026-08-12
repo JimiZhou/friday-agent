@@ -44,7 +44,7 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
       sentAt: receivedAt,
       payload: {
         displayName: "fleet-node",
-        version: "0.1.0",
+        version: "0.2.0",
         capabilities: ["orchestration", "sandbox"],
         workspaces: ["infra", "friday-agent"],
         shellExecution: false,
@@ -66,15 +66,17 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
   friday.state.apply(heartbeat, { live: true });
   friday.adapterRegistry.register({
     runnerId,
-    adapter: "codex-app-server",
+    adapter: "remote-agent",
     image: "friday-codex:0.145.0",
     imageId: `sha256:${"c".repeat(64)}`,
   });
+  friday.adapterRegistry.enable(runnerId, "remote-agent");
+  friday.adapterRegistry.register({ runnerId, adapter: "codex-app-server", image: "friday-codex:0.145.0", imageId: `sha256:${"c".repeat(64)}` });
   friday.adapterRegistry.enable(runnerId, "codex-app-server");
   const address = await friday.start();
   const base = `http://${address.host}:${address.port}`;
 
-  const fleet = await request(base, "/v2/fleet?workspaceId=infra&tool=diagnostic");
+  const fleet = await request(base, "/v2/fleet?workspaceId=infra&tool=agent");
   assert.equal(fleet.response.status, 200);
   assert.deepEqual(fleet.body.runners, [{ runnerId, displayName: "fleet-node", eligible: true, load: 0, rejections: [] }]);
 
@@ -82,7 +84,7 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
     idempotencyKey: randomUUID(),
     runnerSelector: "auto",
     workspaceId: "infra",
-    tool: "diagnostic",
+    tool: "agent",
     operation: "diagnose",
     prompt: "Inspect the registered host",
   };

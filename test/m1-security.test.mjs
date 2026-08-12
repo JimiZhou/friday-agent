@@ -90,7 +90,7 @@ test("sandboxd accepts only a signed job worktree and produces a no-network Dock
   assert.ok(spec);
   const worktree = join(state, "jobs", spec.jobId, "worktree");
   await mkdir(worktree, { recursive: true, mode: 0o700 });
-  const config = { socketPath: join(root, "sandbox.sock"), runnerStateDir: state, hubPublicKeyFile: keyFile, image: "friday-diagnostic-fixture:0.1.0", imageId: `sha256:${"a".repeat(64)}`, codexImage: { image: "friday-agent:0.1.0", imageId: `sha256:${"c".repeat(64)}` }, hubUrl: new URL("http://127.0.0.1:4310/"), modelRelayDirectory: "/tmp/friday-model-relays", runnerUid: 1001, runnerGid: 1000 };
+  const config = { socketPath: join(root, "sandbox.sock"), runnerStateDir: state, hubPublicKeyFile: keyFile, agentImage: { image: "friday-agent:0.1.0", imageId: `sha256:${"a".repeat(64)}` }, codexImage: { image: "friday-agent:0.1.0", imageId: `sha256:${"c".repeat(64)}` }, hubUrl: new URL("http://127.0.0.1:4310/"), modelRelayDirectory: "/tmp/friday-model-relays", runnerUid: 1001, runnerGid: 1000 };
   const modelAccess = { protocolVersion: JOB_PROTOCOL_VERSION, accessToken: "x".repeat(43), jobId: spec.jobId, runnerId: spec.runnerId, leaseId: spec.leaseId, tool: "codex", provider: "openai", model: "codex-test", expiresAt: new Date(Date.parse(spec.leaseExpiresAt) - 1_000).toISOString() };
   assert.equal(validateRequest(config, { spec, worktreePath: worktree, modelAccess }).jobId, spec.jobId);
   const args = sandboxDockerArguments(config, { spec, worktreePath: worktree, modelAccess });
@@ -133,7 +133,7 @@ test("Hub artifact storage binds bytes to a live lease and does not expose path 
   t.after(() => rm(root, { recursive: true, force: true }));
   const hub = await loadOrCreateHubIdentity(root);
   const registry = new SqliteJobRegistry(join(root, "friday.sqlite"), hub); registry.open(); t.after(() => registry.close());
-  const input = { idempotencyKey: randomUUID(), runnerId: randomUUID(), workspaceId: "repo", tool: "diagnostic", operation: "test", prompt: "fixture" };
+  const input = { idempotencyKey: randomUUID(), runnerId: randomUUID(), workspaceId: "repo", tool: "agent", operation: "test", prompt: "fixture" };
   const created = registry.create(input); const spec = registry.pull(input.runnerId); assert.ok(spec);
   registry.assertActiveLease(created.job.jobId, input.runnerId, spec.leaseId);
   const bytes = Buffer.from("diff --git a/a b/a\n", "utf8"); const sha256 = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
@@ -148,7 +148,7 @@ test("signed Runner artifact upload becomes an Owner-only downloadable diff", as
   const friday = await createFridayServer({ host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, maxBodyBytes: 1_048_576 }); t.after(() => friday.stop());
   const address = await friday.start(); const base = `http://${address.host}:${address.port}`; const runnerId = randomUUID(); const keys = generateKeyPairSync("ed25519");
   const enrollment = friday.runnerRegistry.issueEnrollment(Date.now(), runnerId); friday.runnerRegistry.consumeEnrollment(runnerId, enrollment.enrollmentToken, keys.publicKey.export({ type: "spki", format: "pem" }).toString());
-  const created = friday.jobRegistry.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "repo", tool: "diagnostic", operation: "develop", prompt: "fixture" }); const spec = friday.jobRegistry.pull(runnerId); assert.ok(spec);
+  const created = friday.jobRegistry.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "repo", tool: "agent", operation: "develop", prompt: "fixture" }); const spec = friday.jobRegistry.pull(runnerId); assert.ok(spec);
   const artifactId = randomUUID(); const bytes = Buffer.from("diff --git a/a b/a\n", "utf8"); const sha256 = (await import("node:crypto")).createHash("sha256").update(bytes).digest("hex");
   const path = `/v2/runners/${runnerId}/jobs/${created.job.jobId}/artifacts/${artifactId}`;
   const value = { protocolVersion: JOB_PROTOCOL_VERSION, runnerId, jobId: created.job.jobId, leaseId: spec.leaseId, artifactId, name: "changes.diff", mediaType: "text/x-diff", sha256, sizeBytes: bytes.byteLength, contentBase64: bytes.toString("base64") };

@@ -11,7 +11,7 @@
     "idempotencyKey": { "type": "string", "format": "uuid" },
     "runnerId": { "type": "string", "format": "uuid" },
     "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-    "tool": { "enum": ["codex", "pi", "claude", "diagnostic"] },
+    "tool": { "enum": ["agent", "codex", "pi", "claude"] },
     "operation": { "enum": ["develop", "diagnose", "review", "test"] },
     "prompt": { "type": "string", "minLength": 1, "maxLength": 32768 },
     "risk": { "enum": ["R0", "R1", "R2", "R3"] },

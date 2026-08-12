@@ -128,7 +128,7 @@ test("fridayctl release contains a runnable compiled Runner and no TypeScript so
   });
   assert.deepEqual(JSON.parse(result.stdout), {
     protocolVersion: "1",
-    runnerVersion: "0.1.0",
+    runnerVersion: "0.2.0",
     capabilities: ["orchestration"],
     workspaces: [],
     shellExecution: false,
@@ -141,18 +141,17 @@ test("fridayctl release contains a runnable compiled Runner and no TypeScript so
   assert.doesNotMatch(await readFile(join(repository, "deploy", "runner", "friday-runner-managed@.service"), "utf8"), /ENROLLMENT|OWNER_TOKEN/);
 });
 
-test("fridayctl builds a digestable Sandbox release with a pinned fixture base", async (t) => {
+test("fridayctl builds a digestable Sandbox release with the pinned Agent runtime", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "fridayctl-sandbox-release-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const release = await createSandboxdRelease(repository, directory);
   const listing = (await execFile("tar", ["-tzf", release.archive])).stdout;
   assert.match(listing, /release\/apps\/sandboxd\/dist\/index\.js/);
   assert.match(listing, /release\/apps\/sandboxd\/dist\/agent-wrapper\.js/);
-  assert.match(listing, /release\/fixture\/Dockerfile/);
   assert.match(listing, /release\/agent\/Dockerfile/);
   assert.match(listing, /release\/agent\/package-lock\.json/);
   assert.match(listing, /release\/agent\/verify-agent-contracts\.mjs/);
   assert.match(listing, /release\/friday-sandboxd\.service/);
   assert.doesNotMatch(listing, /\/\._/);
-  assert.match(await readFile(join(repository, "deploy", "sandboxd", "fixture", "Dockerfile"), "utf8"), /^FROM node:22\.23\.1-bookworm-slim@sha256:[a-f0-9]{64}$/m);
+  assert.doesNotMatch(listing, /release\/fixture\/Dockerfile/);
 });

@@ -67,7 +67,7 @@ sudo ./deploy/hub/install-hub.sh \
 - 创建 `friday-hub` 低权限系统用户；
 - 创建 `/var/lib/friday-hub/state` 与 `/var/lib/friday-channel-gateway`，权限 `0700`；
 - 生成 `deploy/hub/.env`、`deploy/hub/hub.env` 和 `deploy/gateway/gateway.env`，权限 `0600`；
-- 构建 `friday-agent-hub:0.1.1`，启动 Hub 和 Channel Gateway；
+- 构建 `friday-agent-hub:0.2.0`，启动 Hub 和 Channel Gateway；
 - 为 iLink 生成作用域化 ingest token；
 - Tailscale 模式执行 `tailscale serve --bg --https=443`，不执行 Funnel；
 - 只在终端输出一次 Web 密码与 Owner Token。
@@ -149,14 +149,14 @@ npm ci --ignore-scripts
 npm run build
 ```
 
-目标机要求：Linux/systemd、Node.js `>=22.19.0`、`runuser`、`sha256sum`、`tar`、已有服务用户，以及 root 或免交互 `sudo`。Workspace 必须是 `/srv/friday-workspaces/` 下的 Git 顶层目录。
+目标机要求：Linux/systemd、Node.js `>=22.19.0`、`runuser`、`sha256sum`、`tar`、已有服务用户，以及 root 或免交互 `sudo`。Remote Agent 的节点能力目录只需是服务用户可访问的受控现有目录；Codex/Pi/Claude 源码 Workspace 必须是 `/srv/friday-workspaces/` 下的 Git 顶层目录。
 
 ```sh
 npm run fridayctl -- runner bootstrap node-user@managed-node.example-tailnet.ts.net \
   --hub-url https://friday-hub.example-tailnet.ts.net \
   --runner-name managed-node-01 \
   --service-user node-user \
-  --workspace project=/srv/friday-workspaces/project \
+  --workspace node=/srv/friday-nodes/node \
   --identity-file "$HOME/.ssh/friday_agent" \
   --dry-run
 ```
@@ -194,7 +194,7 @@ npm run fridayctl -- runner sandbox install node-user@managed-node.example-tailn
 - `@earendil-works/pi-coding-agent@0.84.1`
 - `@anthropic-ai/claude-code@2.1.227`
 
-成功结果包含 Sandbox release ID、诊断镜像 ID 和 Agent 镜像内容 ID。`friday-sandboxd` 是唯一能调用 Docker 的组件；Runner 没有 Docker socket、Root、SSH Agent 或长期模型 Key。Job 容器使用 `--network none`、非 root、只读根、无 capabilities，只挂载当前 Worktree 和模型 relay socket。
+成功结果包含 Sandbox release ID 和 Agent 镜像内容 ID。`friday-sandboxd` 是唯一能调用 Docker 的组件；Runner 没有 Docker socket、Root、SSH Agent 或长期模型 Key。Job 容器使用 `--network none`、非 root、只读根、无 capabilities，只挂载当前 Worktree 和模型 relay socket。旧 diagnostic fixture 已从发布树移除；数据库兼容测试只验证历史记录可审计且绝不再派发。
 
 ## 8. 验收
 

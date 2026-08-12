@@ -19,7 +19,7 @@ test("channel outbox persists terminal Job results and requires the exact delive
   t.after(() => { outbox.close(); jobs.close(); });
 
   const runnerId = randomUUID();
-  const created = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "inspect" }).job;
+  const created = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "inspect" }).job;
   const spec = created.spec;
   const notifier = new JobChannelNotifier(outbox, jobs);
   notifier.bind(created.jobId, "wechat_ilink", "owner-wechat");
@@ -49,7 +49,7 @@ test("channel outbox reconciles a terminal Job after a Hub interruption", async 
   jobs.open(); outbox.open();
   t.after(() => { outbox.close(); jobs.close(); });
   const runnerId = randomUUID();
-  const created = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "infra", tool: "diagnostic", operation: "diagnose", prompt: "inspect" }).job;
+  const created = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "inspect" }).job;
   const notifier = new JobChannelNotifier(outbox, jobs);
   notifier.bind(created.jobId, "telegram", "123456789");
   const spec = created.spec;
@@ -59,4 +59,28 @@ test("channel outbox reconciles a terminal Job after a Hub interruption", async 
   assert.equal(notifier.reconcile(), 1);
   assert.equal(notifier.reconcile(), 0);
   assert.match(outbox.pull("telegram").text, /任务执行失败/);
+});
+
+test("channel outbox delivers each clearance request independently from the terminal result", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "friday-channel-clearance-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const databasePath = join(stateDir, "friday.sqlite");
+  const jobs = new SqliteJobRegistry(databasePath, await loadOrCreateHubIdentity(stateDir));
+  const outbox = new ChannelOutbox(databasePath);
+  jobs.open(); outbox.open();
+  t.after(() => { outbox.close(); jobs.close(); });
+  const runnerId = randomUUID();
+  const job = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "node", tool: "agent", operation: "diagnose", prompt: "inspect" }).job;
+  const notifier = new JobChannelNotifier(outbox, jobs);
+  notifier.bind(job.jobId, "wechat_ilink", "owner-wechat");
+  const call = { protocolVersion: "2", callId: randomUUID(), jobId: job.jobId, runnerId, leaseId: job.spec.leaseId, name: "service.restart", arguments: { unit: "demo.service" }, reason: "Recovery requires a restart", requestedAt: new Date().toISOString() };
+  const decision = { status: "WAIT_APPROVAL", risk: "R2", background: "Service restart may interrupt requests." };
+  assert.equal(notifier.requestClearance(call, decision), true);
+  assert.equal(notifier.requestClearance(call, decision), false);
+  const notification = outbox.pull("wechat_ilink");
+  assert.match(notification.text, /需要你的授权/);
+  assert.match(notification.text, /R2/);
+  assert.match(notification.text, /demo\.service/);
+  assert.equal(outbox.acknowledge("wechat_ilink", notification.notificationId, notification.leaseId), true);
+  assert.equal(outbox.pull("wechat_ilink"), undefined);
 });

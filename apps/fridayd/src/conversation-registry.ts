@@ -22,7 +22,7 @@ export interface ConversationJobProposal {
 
 export interface ConversationSelfImprovementProposal extends SelfImprovementContext {
   readonly workspaceId: string;
-  readonly tool: Exclude<JobToolV2, "diagnostic">;
+  readonly tool: Exclude<JobToolV2, "agent">;
   readonly prompt: string;
   readonly runnerSelector: "auto";
 }
@@ -444,7 +444,7 @@ export function validateJobProposal(proposal: ConversationJobProposal): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(proposal.workspaceId)) {
     throw new Error("Job proposal workspaceId is invalid");
   }
-  if (!(["codex", "pi", "claude", "diagnostic"] as const).includes(proposal.tool)) {
+  if (!(["agent", "codex", "pi", "claude"] as const).includes(proposal.tool)) {
     throw new Error("Job proposal tool is invalid");
   }
   if (!(["develop", "diagnose", "review", "test"] as const).includes(proposal.operation)) {

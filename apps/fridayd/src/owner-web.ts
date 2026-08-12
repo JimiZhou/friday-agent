@@ -443,7 +443,7 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
 export const OWNER_WEB_SCRIPT = String.raw`const byId = (id) => document.getElementById(id);
 const all = (selector) => Array.from(document.querySelectorAll(selector));
 const appState = {
-  jobs: [], runners: [], improvements: [], conversationId: "main", activeView: "chat",
+  jobs: [], runners: [], improvements: [], nodeToolApprovals: [], conversationId: "main", activeView: "chat",
   pairingId: null, pairingTimer: null, recorder: null, voiceChunks: [],
   pendingMedia: [], uploadInFlight: false, sending: false,
   talkActive: false, recognition: null, talkTranscript: "", talkTimer: null,
@@ -456,7 +456,7 @@ const stateLabels = {
   UNKNOWN: "状态未知", NEW: "已创建", PLANNING: "规划中", DRAFT: "草稿", TESTED: "测试通过",
   CLEARED: "已授权", CANARY: "小流量验证", DEPLOYED: "已部署", ROLLED_BACK: "已回滚"
 };
-const toolLabels = { diagnostic: "诊断", codex: "Codex", pi: "Pi", claude: "Claude Code" };
+const toolLabels = { agent: "Friday Agent", codex: "Codex", pi: "Pi", claude: "Claude Code" };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -1165,8 +1165,9 @@ async function runAction(button, action, successMessage) {
 
 async function loadClearance() {
   try {
-    const result = await api("/v4/self-improvements");
+    const [result, nodeTools] = await Promise.all([api("/v4/self-improvements"), api("/v2/node-tool-approvals")]);
     appState.improvements = result.improvements || [];
+    appState.nodeToolApprovals = nodeTools.approvals || [];
     renderApprovals();
     renderImprovements();
     updateCounts();
@@ -1177,7 +1178,24 @@ function renderApprovals() {
   const host = byId("approval-list");
   host.replaceChildren();
   const pending = appState.jobs.filter((job) => job.status === "WAIT_APPROVAL" && job.risk === "R1");
-  if (!pending.length) { host.append(emptyRow("当前没有等待授权的设备任务。")); return; }
+  (appState.nodeToolApprovals || []).forEach((item) => {
+    const row = element("article", "approval-row");
+    const copy = element("div", "approval-copy");
+    const title = element("div", "ledger-title");
+    title.append(element("h3", "", item.call.name), statusChip("WAIT_APPROVAL"), element("span", "risk-chip", item.risk));
+    copy.append(title, element("p", "ledger-meta", "任务 " + shortId(item.call.jobId) + " · 调用 " + shortId(item.call.callId)));
+    const context = element("div", "approval-context");
+    context.append(contextItem("背景", item.call.reason), contextItem("能力分级", item.background), contextItem("精确参数", JSON.stringify(item.call.arguments)));
+    copy.append(context);
+    const actions = element("div", "approval-actions");
+    const approve = element("button", "button button-primary", "确认风险并授权");
+    approve.type = "button";
+    approve.addEventListener("click", () => runAction(approve, () => post("/v2/node-tool-approvals/" + item.call.callId + "/approve", {}), "节点工具调用已授权"));
+    actions.append(approve);
+    row.append(copy, actions);
+    host.append(row);
+  });
+  if (!pending.length && !(appState.nodeToolApprovals || []).length) { host.append(emptyRow("当前没有等待授权的设备任务。")); return; }
   pending.forEach((job) => host.append(jobRow(job, true)));
 }
 
@@ -1228,7 +1246,7 @@ byId("refresh-clearance").addEventListener("click", () => Promise.all([loadJobs(
 
 function updateCounts() {
   const tasks = appState.jobs.filter((job) => !terminalStates.has(job.status)).length;
-  const clearance = appState.jobs.filter((job) => job.status === "WAIT_APPROVAL").length + appState.improvements.filter((item) => ["TESTED", "WAIT_APPROVAL", "CLEARED"].includes(item.state)).length;
+  const clearance = appState.jobs.filter((job) => job.status === "WAIT_APPROVAL" && job.risk === "R1").length + (appState.nodeToolApprovals || []).length + appState.improvements.filter((item) => ["TESTED", "WAIT_APPROVAL", "CLEARED"].includes(item.state)).length;
   [["task-count", tasks], ["clearance-count", clearance]].forEach(([id, count]) => {
     const node = byId(id);
     node.textContent = String(count);

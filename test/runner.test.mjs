@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID, verify } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -430,6 +430,7 @@ test("runner obtains a device-signed model grant before handing an Agent Job to 
 
   const sandboxRequests = [];
   const controller = new AbortController();
+  const failSafe = setTimeout(() => controller.abort(), 5_000);
   const sandbox = createNetServer((socket) => {
     let raw = "";
     socket.setEncoding("utf8");
@@ -458,4 +459,99 @@ test("runner obtains a device-signed model grant before handing an Agent Job to 
   assert.match(sandboxRequests[0].modelAccess.accessToken, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(JSON.stringify(sandboxRequests[0]).includes("hub-only-upstream-key"), false);
   assert.equal(friday.jobRegistry.get(created.job.jobId).status, "SUCCEEDED");
+});
+
+test("Remote Agent completes a multi-step evidence loop on a non-Git managed node", async (t) => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "friday-runner-agent-loop-"));
+  const nodeRoot = await mkdtemp(join(tmpdir(), "friday-runner-agent-node-"));
+  const hubState = await mkdtemp(join(tmpdir(), "friday-runner-agent-hub-"));
+  const socketPath = join(stateDirectory, "sandbox.sock");
+  const friday = await createFridayServer({
+    host: "127.0.0.1", port: 0, stateDir: hubState, ownerId: "owner", ownerToken: "runner-agent-owner-token",
+    runnerModelProxy: { openai: { baseUrl: new URL("http://127.0.0.1:9/v1/"), apiKey: "hub-only-upstream-key", codexModel: "fixed-codex-model", piModel: "fixed-pi-model" }, tokenTtlSeconds: 300, requestTimeoutMs: 5_000, maxRequestBytes: 1_048_576 },
+    maxBodyBytes: 1_048_576,
+  });
+  const address = await friday.start();
+  const enrollment = friday.runnerRegistry.issueEnrollment();
+  new RunnerWorkspaceRegistry(stateDirectory).register("node", nodeRoot);
+  const config = loadRunnerConfig({ FRIDAY_HUB_URL: `http://${address.host}:${address.port}`, FRIDAY_RUNNER_STATE_DIR: stateDirectory, FRIDAY_RUNNER_ID: enrollment.runnerId, FRIDAY_RUNNER_ENROLLMENT_TOKEN: enrollment.enrollmentToken, FRIDAY_HEARTBEAT_INTERVAL_MS: "10", FRIDAY_REQUEST_TIMEOUT_MS: "2000", FRIDAY_SANDBOX_SOCKET: socketPath });
+  const runner = new FridayRunner(config);
+  await runner.register();
+  const created = friday.jobRegistry.create({ idempotencyKey: randomUUID(), runnerId: config.runnerId, workspaceId: "node", tool: "agent", operation: "diagnose", prompt: "Read the host mapping and report evidence" }).job;
+  const sandboxRequests = [];
+  const controller = new AbortController();
+  const failSafe = setTimeout(() => controller.abort(), 5_000);
+  const sandbox = createNetServer((socket) => {
+    let raw = "";
+    socket.setEncoding("utf8"); socket.on("data", (chunk) => { raw += chunk; });
+    socket.once("end", () => {
+      const request = JSON.parse(raw); sandboxRequests.push(request);
+      const stdout = sandboxRequests.length === 1
+        ? JSON.stringify({ type: "finish", summary: "Everything is fine." })
+        : sandboxRequests.length === 2
+          ? JSON.stringify({ type: "tool_call", callId: randomUUID(), name: "file.read", arguments: { path: "/tmp", maxBytes: 65536 }, reason: "Try a candidate evidence path" })
+          : sandboxRequests.length === 3
+            ? JSON.stringify({ type: "tool_call", callId: randomUUID(), name: "file.read", arguments: { path: "/etc/hosts", maxBytes: 65536 }, reason: "Recover from the failed path and obtain real node evidence" })
+            : JSON.stringify({ type: "finish", summary: "Verified the managed node host mapping from /etc/hosts; the result is based on the returned file hash and contents." });
+      socket.end(JSON.stringify({ ok: true, exitCode: 0, stdout, stderr: "", executorImageId: `sha256:${"e".repeat(64)}` }));
+      if (sandboxRequests.length === 4) { clearTimeout(failSafe); controller.abort(); }
+    });
+  });
+  sandbox.listen(socketPath); await once(sandbox, "listening");
+  t.after(async () => { clearTimeout(failSafe); await closeServer(sandbox); await friday.stop(); await rm(stateDirectory, { recursive: true, force: true }); await rm(nodeRoot, { recursive: true, force: true }); await rm(hubState, { recursive: true, force: true }); });
+  await runner.run(controller.signal);
+  assert.equal(sandboxRequests.length, 4);
+  assert.equal(sandboxRequests[0].modelAccess.tool, "agent");
+  assert.equal(sandboxRequests[0].worktreePath, await realpath(join(stateDirectory, "jobs", created.jobId, "worktree")));
+  assert.match(sandboxRequests[1].agentPrompt, /no real node observation/);
+  assert.match(sandboxRequests[2].agentPrompt, /outside the node read allow-list/);
+  assert.match(sandboxRequests[3].agentPrompt, /toolExchanges/);
+  assert.match(sandboxRequests[3].agentPrompt, /\/etc\/hosts|\/private\/etc\/hosts/);
+  assert.match(sandboxRequests[3].agentPrompt, /sha256/);
+  assert.equal(friday.jobRegistry.get(created.jobId).status, "SUCCEEDED");
+  assert.match(friday.jobRegistry.listEvents(created.jobId).find((entry) => entry.event.type === "output").event.chunk, /Verified the managed node/);
+});
+
+test("Remote Agent repairs a malformed model action without discarding real observations", async (t) => {
+  const stateDirectory = await mkdtemp(join(tmpdir(), "friday-runner-agent-repair-"));
+  const nodeRoot = await mkdtemp(join(tmpdir(), "friday-runner-agent-repair-node-"));
+  const hubState = await mkdtemp(join(tmpdir(), "friday-runner-agent-repair-hub-"));
+  const socketPath = join(stateDirectory, "sandbox.sock");
+  const friday = await createFridayServer({
+    host: "127.0.0.1", port: 0, stateDir: hubState, ownerId: "owner", ownerToken: "runner-agent-repair-owner-token",
+    runnerModelProxy: { openai: { baseUrl: new URL("http://127.0.0.1:9/v1/"), apiKey: "hub-only-upstream-key", codexModel: "fixed-codex-model", piModel: "fixed-pi-model" }, tokenTtlSeconds: 300, requestTimeoutMs: 5_000, maxRequestBytes: 1_048_576 },
+    maxBodyBytes: 1_048_576,
+  });
+  const address = await friday.start();
+  const enrollment = friday.runnerRegistry.issueEnrollment();
+  new RunnerWorkspaceRegistry(stateDirectory).register("node", nodeRoot);
+  const config = loadRunnerConfig({ FRIDAY_HUB_URL: `http://${address.host}:${address.port}`, FRIDAY_RUNNER_STATE_DIR: stateDirectory, FRIDAY_RUNNER_ID: enrollment.runnerId, FRIDAY_RUNNER_ENROLLMENT_TOKEN: enrollment.enrollmentToken, FRIDAY_HEARTBEAT_INTERVAL_MS: "10", FRIDAY_REQUEST_TIMEOUT_MS: "2000", FRIDAY_SANDBOX_SOCKET: socketPath });
+  const runner = new FridayRunner(config);
+  await runner.register();
+  const created = friday.jobRegistry.create({ idempotencyKey: randomUUID(), runnerId: config.runnerId, workspaceId: "node", tool: "agent", operation: "diagnose", prompt: "Read host identity" }).job;
+  const sandboxRequests = [];
+  const controller = new AbortController();
+  const failSafe = setTimeout(() => controller.abort(), 5_000);
+  const sandbox = createNetServer((socket) => {
+    let raw = "";
+    socket.setEncoding("utf8"); socket.on("data", (chunk) => { raw += chunk; });
+    socket.once("end", () => {
+      const request = JSON.parse(raw); sandboxRequests.push(request);
+      const stdout = sandboxRequests.length === 1
+        ? JSON.stringify({ type: "tool_call", callId: randomUUID(), name: "file.read", arguments: { path: "/etc/hosts" }, reason: "Observe host identity" })
+        : sandboxRequests.length === 2
+          ? JSON.stringify({ type: "tool_call", callId: randomUUID(), name: "file.read", arguments: { path: "/etc/hosts" }, reason: "Invalid extra field", risk: "R0" })
+          : JSON.stringify({ type: "finish", summary: "Verified host identity from the observed hosts file." });
+      socket.end(JSON.stringify({ ok: true, exitCode: 0, stdout, stderr: "", executorImageId: `sha256:${"f".repeat(64)}` }));
+      if (sandboxRequests.length === 3) { clearTimeout(failSafe); controller.abort(); }
+    });
+  });
+  sandbox.listen(socketPath); await once(sandbox, "listening");
+  t.after(async () => { clearTimeout(failSafe); await closeServer(sandbox); await friday.stop(); await rm(stateDirectory, { recursive: true, force: true }); await rm(nodeRoot, { recursive: true, force: true }); await rm(hubState, { recursive: true, force: true }); });
+  await runner.run(controller.signal);
+  assert.equal(sandboxRequests.length, 3);
+  assert.match(sandboxRequests[2].agentPrompt, /previous response was rejected/);
+  assert.match(sandboxRequests[2].agentPrompt, /toolExchanges/);
+  assert.match(sandboxRequests[2].agentPrompt, /\/etc\/hosts|\/private\/etc\/hosts/);
+  assert.equal(friday.jobRegistry.get(created.jobId).status, "SUCCEEDED");
 });

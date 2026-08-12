@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-import type { JobExecutionStateV2 } from "@friday/protocol";
+import type { JobExecutionStateV2, NodeToolCallV1, NodeToolDecisionV1 } from "@friday/protocol";
 import type { SqliteJobRegistry } from "./job-registry.js";
 
 export type OutboundChannel = "telegram" | "wechat_ilink";
@@ -57,6 +57,23 @@ export class ChannelOutbox {
         ) STRICT;
         CREATE INDEX IF NOT EXISTS channel_outbox_delivery_v1
           ON channel_outbox_v1(channel, status, available_at, created_at);
+        CREATE TABLE IF NOT EXISTS channel_clearance_outbox_v1 (
+          notification_id TEXT PRIMARY KEY,
+          call_id TEXT NOT NULL UNIQUE,
+          job_id TEXT NOT NULL REFERENCES channel_job_bindings_v1(job_id),
+          channel TEXT NOT NULL,
+          sender_id TEXT NOT NULL,
+          text TEXT NOT NULL,
+          status TEXT NOT NULL,
+          attempts INTEGER NOT NULL,
+          available_at TEXT NOT NULL,
+          lease_id TEXT,
+          lease_expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        ) STRICT;
+        CREATE INDEX IF NOT EXISTS channel_clearance_outbox_delivery_v1
+          ON channel_clearance_outbox_v1(channel, status, available_at, created_at);
       `);
     } catch (error) {
       this.close();
@@ -94,6 +111,22 @@ export class ChannelOutbox {
     return result.changes === 1;
   }
 
+  enqueueClearance(jobId: string, callId: string, text: string, now = new Date()): boolean {
+    requireUuid(jobId, "jobId"); requireUuid(callId, "callId"); requireText(text);
+    const database = this.#requireDatabase();
+    const binding = database.prepare("SELECT channel, sender_id AS senderId FROM channel_job_bindings_v1 WHERE job_id = ?").get(jobId) as unknown;
+    if (!isRecord(binding) || !isChannel(binding.channel) || typeof binding.senderId !== "string") return false;
+    const timestamp = now.toISOString();
+    const result = database.prepare(`
+      INSERT INTO channel_clearance_outbox_v1 (
+        notification_id, call_id, job_id, channel, sender_id, text, status, attempts,
+        available_at, lease_id, lease_expires_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 0, ?, NULL, NULL, ?, ?)
+      ON CONFLICT(call_id) DO NOTHING
+    `).run(randomUUID(), callId.toLowerCase(), jobId.toLowerCase(), binding.channel, binding.senderId, text, timestamp, timestamp, timestamp);
+    return result.changes === 1;
+  }
+
   pull(channel: OutboundChannel, now = new Date()): ChannelNotification | undefined {
     requireChannel(channel);
     const database = this.#requireDatabase();
@@ -105,20 +138,28 @@ export class ChannelOutbox {
         SET status = 'PENDING', lease_id = NULL, lease_expires_at = NULL, available_at = ?, updated_at = ?
         WHERE channel = ? AND status = 'LEASED' AND lease_expires_at <= ?
       `).run(timestamp, timestamp, channel, timestamp);
+      database.prepare(`
+        UPDATE channel_clearance_outbox_v1
+        SET status = 'PENDING', lease_id = NULL, lease_expires_at = NULL, available_at = ?, updated_at = ?
+        WHERE channel = ? AND status = 'LEASED' AND lease_expires_at <= ?
+      `).run(timestamp, timestamp, channel, timestamp);
       const row = database.prepare(`
-        SELECT notification_id AS notificationId, channel, sender_id AS senderId, text
-        FROM channel_outbox_v1
-        WHERE channel = ? AND status = 'PENDING' AND available_at <= ?
-        ORDER BY created_at, notification_id LIMIT 1
-      `).get(channel, timestamp) as unknown;
-      if (!isRecord(row) || typeof row.notificationId !== "string" || !isChannel(row.channel) || typeof row.senderId !== "string" || typeof row.text !== "string") {
+        SELECT source, notificationId, channel, senderId, text FROM (
+          SELECT 'terminal' AS source, notification_id AS notificationId, channel, sender_id AS senderId, text, created_at AS createdAt
+          FROM channel_outbox_v1 WHERE channel = ? AND status = 'PENDING' AND available_at <= ?
+          UNION ALL
+          SELECT 'clearance' AS source, notification_id AS notificationId, channel, sender_id AS senderId, text, created_at AS createdAt
+          FROM channel_clearance_outbox_v1 WHERE channel = ? AND status = 'PENDING' AND available_at <= ?
+        ) ORDER BY createdAt, notificationId LIMIT 1
+      `).get(channel, timestamp, channel, timestamp) as unknown;
+      if (!isRecord(row) || (row.source !== "terminal" && row.source !== "clearance") || typeof row.notificationId !== "string" || !isChannel(row.channel) || typeof row.senderId !== "string" || typeof row.text !== "string") {
         database.exec("COMMIT");
         return undefined;
       }
       const leaseId = randomUUID();
       const leaseExpiresAt = new Date(now.getTime() + LEASE_MS).toISOString();
       const changed = database.prepare(`
-        UPDATE channel_outbox_v1
+        UPDATE ${row.source === "terminal" ? "channel_outbox_v1" : "channel_clearance_outbox_v1"}
         SET status = 'LEASED', attempts = attempts + 1, lease_id = ?, lease_expires_at = ?, updated_at = ?
         WHERE notification_id = ? AND status = 'PENDING'
       `).run(leaseId, leaseExpiresAt, timestamp, row.notificationId);
@@ -133,12 +174,16 @@ export class ChannelOutbox {
 
   acknowledge(channel: OutboundChannel, notificationId: string, leaseId: string, now = new Date()): boolean {
     requireChannel(channel); requireUuid(notificationId, "notificationId"); requireUuid(leaseId, "leaseId");
-    const result = this.#requireDatabase().prepare(`
-      UPDATE channel_outbox_v1
-      SET status = 'DELIVERED', lease_id = NULL, lease_expires_at = NULL, updated_at = ?
-      WHERE notification_id = ? AND channel = ? AND status = 'LEASED' AND lease_id = ?
-    `).run(now.toISOString(), notificationId.toLowerCase(), channel, leaseId.toLowerCase());
-    return result.changes === 1;
+    const database = this.#requireDatabase();
+    for (const table of ["channel_outbox_v1", "channel_clearance_outbox_v1"] as const) {
+      const result = database.prepare(`
+        UPDATE ${table}
+        SET status = 'DELIVERED', lease_id = NULL, lease_expires_at = NULL, updated_at = ?
+        WHERE notification_id = ? AND channel = ? AND status = 'LEASED' AND lease_id = ?
+      `).run(now.toISOString(), notificationId.toLowerCase(), channel, leaseId.toLowerCase());
+      if (result.changes === 1) return true;
+    }
+    return false;
   }
 
   terminalJobsMissingNotification(): readonly string[] {
@@ -168,6 +213,19 @@ export class JobChannelNotifier {
     const job = this.jobs.get(jobId);
     if (job === undefined || !TERMINAL_STATES.has(job.status)) return false;
     return this.outbox.enqueueTerminal(jobId, terminalText(job.status, job.tool, job.operation, this.jobs.listEvents(jobId)));
+  }
+
+  requestClearance(call: NodeToolCallV1, decision: NodeToolDecisionV1): boolean {
+    if (decision.status !== "WAIT_APPROVAL") return false;
+    const argumentsText = JSON.stringify(call.arguments);
+    return this.outbox.enqueueClearance(call.jobId, call.callId, truncateUtf8([
+      "Friday 需要你的授权后才能继续任务。",
+      `风险等级：${decision.risk}`,
+      `背景：${decision.background}`,
+      `能力：${call.name}`,
+      `精确参数：${argumentsText}`,
+      "该操作尚未执行。请登录 Web 控制台核对并授权。",
+    ].join("\n"), NOTIFICATION_TEXT_BYTES));
   }
 
   reconcile(): number {

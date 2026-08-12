@@ -96,18 +96,13 @@ if test ! -e "$release_dir"; then
   rm -rf "$candidate"
   install -d -o root -g root -m 755 "$candidate"
   tar -xzf "$archive" -C "$candidate" --strip-components=1
-  test -f "$candidate/apps/sandboxd/dist/index.js" && test -f "$candidate/apps/sandboxd/dist/agent-wrapper.js" && test -L "$candidate/node_modules/@friday/protocol" && test -f "$candidate/fixture/Dockerfile" && test -f "$candidate/agent/Dockerfile" && test -f "$candidate/agent/package-lock.json" && test -f "$candidate/agent/verify-agent-contracts.mjs" || { echo "sandbox release content is incomplete" >&2; exit 2; }
+  test -f "$candidate/apps/sandboxd/dist/index.js" && test -f "$candidate/apps/sandboxd/dist/agent-wrapper.js" && test -L "$candidate/node_modules/@friday/protocol" && test -f "$candidate/agent/Dockerfile" && test -f "$candidate/agent/package-lock.json" && test -f "$candidate/agent/verify-agent-contracts.mjs" || { echo "sandbox release content is incomplete" >&2; exit 2; }
   chown -R root:root "$candidate"
   find "$candidate" -type d -exec chmod 755 {} +
   find "$candidate" -type f -exec chmod 644 {} +
   mv "$candidate" "$release_dir"
   candidate=
 fi
-
-image=friday-diagnostic-fixture:$release_id
-docker build --pull=false --network=none --tag "$image" "$release_dir/fixture" >/dev/null
-image_id=$(docker image inspect --format '{{.Id}}' "$image")
-case "$image_id" in sha256:????????????????????????????????????????????????????????????????) ;; *) echo "Docker returned an invalid sandbox image id" >&2; exit 2;; esac
 
 agent_image=friday-agent:$release_id
 # This is the only intentionally networked build. package-lock.json pins every
@@ -133,8 +128,8 @@ env_tmp=/etc/friday-sandboxd/.sandboxd.env.$$
   printf 'FRIDAY_SANDBOX_MODEL_RELAY_DIR=/run/friday-sandboxd/model-relays\n'
   printf 'FRIDAY_SANDBOX_RUNNER_UID=%s\n' "$runner_uid"
   printf 'FRIDAY_SANDBOX_RUNNER_GID=%s\n' "$runner_gid"
-  printf 'FRIDAY_SANDBOX_IMAGE=%s\n' "$image"
-  printf 'FRIDAY_SANDBOX_IMAGE_ID=%s\n' "$image_id"
+  printf 'FRIDAY_SANDBOX_AGENT_IMAGE=%s\n' "$agent_image"
+  printf 'FRIDAY_SANDBOX_AGENT_IMAGE_ID=%s\n' "$agent_image_id"
   printf 'FRIDAY_SANDBOX_CODEX_IMAGE=%s\n' "$agent_image"
   printf 'FRIDAY_SANDBOX_CODEX_IMAGE_ID=%s\n' "$agent_image_id"
   printf 'FRIDAY_SANDBOX_PI_IMAGE=%s\n' "$agent_image"
@@ -184,8 +179,14 @@ systemctl daemon-reload
 systemctl enable friday-sandboxd.service
 systemctl restart friday-sandboxd.service
 systemctl restart "friday-runner@$service_user.service"
+sleep 2
 systemctl is-active --quiet friday-sandboxd.service
 systemctl is-active --quiet "friday-runner@$service_user.service"
+stable_pid=$(systemctl show --property=MainPID --value friday-sandboxd.service)
+case "$stable_pid" in ''|0|*[!0-9]*) echo "sandbox service did not expose a stable MainPID" >&2; exit 2;; esac
+sleep 3
+systemctl is-active --quiet friday-sandboxd.service
+test "$(systemctl show --property=MainPID --value friday-sandboxd.service)" = "$stable_pid" || { echo "sandbox service did not remain stable after activation" >&2; exit 2; }
 test "$(stat -c %a /etc/friday-sandboxd/sandboxd.env)" = 600
 test "$(stat -c %a /etc/friday-sandboxd/hub-ed25519.pub)" = 600
-printf 'release_id=%s\ndiagnostic_image_id=%s\nagent_image_id=%s\n' "$release_id" "$image_id" "$agent_image_id"
+printf 'release_id=%s\nagent_image_id=%s\n' "$release_id" "$agent_image_id"

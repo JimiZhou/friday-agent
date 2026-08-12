@@ -156,7 +156,7 @@ test("fridayd accepts one owner, registers a runner, and restores its event log"
     sentAt: new Date().toISOString(),
     payload: {
       displayName: "Mac mini",
-      version: "0.1.0",
+      version: "0.2.0",
       capabilities: ["orchestration"],
       workspaces: ["demo"],
       shellExecution: false,
@@ -243,7 +243,7 @@ test("an enrolled Runner interoperates with fridayd while unsigned and legacy-to
     sentAt: new Date().toISOString(),
     payload: {
       displayName: "Untrusted",
-      version: "0.1.0",
+      version: "0.2.0",
       capabilities: ["orchestration"],
       workspaces: [],
       shellExecution: false,

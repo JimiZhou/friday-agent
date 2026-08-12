@@ -31,7 +31,7 @@ export class GitWorktreeManager {
     this.#registry = registry;
   }
 
-  async prepare(workspaceId: string, jobId: string): Promise<PreparedWorktree> {
+  async prepare(workspaceId: string, jobId: string, resume = false): Promise<PreparedWorktree> {
     requireWorkspaceId(workspaceId);
     const normalizedJobId = requireJobId(jobId);
     const workspace = this.#registry.get(workspaceId);
@@ -44,7 +44,12 @@ export class GitWorktreeManager {
     assertPrivateDirectory(jobDirectory, "Job worktree directory");
     try {
       lstatSync(worktreePath);
-      throw new Error(`Worktree already exists for job ${normalizedJobId}; reconcile instead of replacing it`);
+      if (!resume) throw new Error(`Worktree already exists for job ${normalizedJobId}; reconcile instead of replacing it`);
+      const canonicalWorktree = canonicalDirectory(worktreePath, "Prepared worktree");
+      if (canonicalWorktree !== worktreePath || !isDescendant(jobDirectory, canonicalWorktree)) throw new Error("Existing worktree escaped the Runner job directory");
+      await assertGitTopLevel(canonicalWorktree);
+      const commit = await gitOutput(canonicalWorktree, ["rev-parse", "HEAD"]);
+      return { jobId: normalizedJobId, workspace, runnerStateDir: this.#stateDir, path: canonicalWorktree, commit };
     } catch (error) {
       if (!isFileMissing(error)) throw error;
     }
@@ -56,6 +61,36 @@ export class GitWorktreeManager {
     }
     const commit = await gitOutput(canonicalWorktree, ["rev-parse", "HEAD"]);
     return { jobId: normalizedJobId, workspace, runnerStateDir: this.#stateDir, path: canonicalWorktree, commit };
+  }
+
+  /**
+   * A node Agent uses structured host tools and has no source checkout. Keep
+   * its sandbox cwd isolated per Job without requiring the registered node
+   * capability to point at a Git repository.
+   */
+  prepareAgentRuntime(workspaceId: string, jobId: string, resume = false): PreparedWorktree {
+    requireWorkspaceId(workspaceId);
+    const normalizedJobId = requireJobId(jobId);
+    const workspace = this.#registry.get(workspaceId);
+    if (workspace === undefined) throw new Error(`Workspace ${workspaceId} is not registered on this Runner`);
+    const jobDirectory = safeJobDirectory(this.#stateDir, normalizedJobId);
+    const runtimePath = join(jobDirectory, "worktree");
+    mkdirSync(jobDirectory, { recursive: true, mode: 0o700 });
+    assertPrivateDirectory(jobDirectory, "Job runtime directory");
+    try {
+      lstatSync(runtimePath);
+      if (!resume) throw new Error(`Runtime already exists for job ${normalizedJobId}; reconcile instead of replacing it`);
+      const canonicalRuntime = canonicalDirectory(runtimePath, "Prepared Agent runtime");
+      if (canonicalRuntime !== runtimePath || !isDescendant(jobDirectory, canonicalRuntime)) throw new Error("Existing Agent runtime escaped the Runner job directory");
+      assertPrivateDirectory(canonicalRuntime, "Prepared Agent runtime");
+      return { jobId: normalizedJobId, workspace, runnerStateDir: this.#stateDir, path: canonicalRuntime, commit: "node-agent-runtime-v1" };
+    } catch (error) {
+      if (!isFileMissing(error)) throw error;
+    }
+    mkdirSync(runtimePath, { mode: 0o700 });
+    const canonicalRuntime = canonicalDirectory(runtimePath, "Prepared Agent runtime");
+    if (canonicalRuntime !== runtimePath || !isDescendant(jobDirectory, canonicalRuntime)) throw new Error("Agent runtime escaped the Runner job directory");
+    return { jobId: normalizedJobId, workspace, runnerStateDir: this.#stateDir, path: canonicalRuntime, commit: "node-agent-runtime-v1" };
   }
 }
 
