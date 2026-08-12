@@ -28,6 +28,14 @@ export interface HubInboundResponse {
   readonly reply?: string;
 }
 
+export interface HubChannelNotification {
+  readonly notificationId: string;
+  readonly channel: Channel;
+  readonly senderId: string;
+  readonly text: string;
+  readonly leaseId: string;
+}
+
 /** Private iLink runtime settings. Credentials are kept in the gateway state directory. */
 export interface IlinkConfig {
   readonly baseUrl: URL;
@@ -37,6 +45,7 @@ export interface IlinkConfig {
   readonly appClientVersion: number;
   readonly cursorPath: string;
   readonly credentialsPath: string;
+  readonly contextPath: string;
   readonly controlToken?: string;
   readonly controlPort: number;
 }
@@ -111,7 +120,7 @@ export function loadIlinkConfig(env: NodeJS.ProcessEnv = process.env): IlinkConf
   if (controlToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(controlToken)) {
     throw new Error("FRIDAY_GATEWAY_CONTROL_TOKEN must be a 32-byte base64url token");
   }
-  const channelVersion = env.FRIDAY_WECHAT_ILINK_CHANNEL_VERSION ?? "0.1.0";
+  const channelVersion = env.FRIDAY_WECHAT_ILINK_CHANNEL_VERSION ?? "0.1.1";
   if (!/^[A-Za-z0-9._+-]{1,64}$/.test(channelVersion)) throw new Error("FRIDAY_WECHAT_ILINK_CHANNEL_VERSION is invalid");
   const appId = env.FRIDAY_WECHAT_ILINK_APP_ID ?? "bot";
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(appId)) throw new Error("FRIDAY_WECHAT_ILINK_APP_ID is invalid");
@@ -126,6 +135,7 @@ export function loadIlinkConfig(env: NodeJS.ProcessEnv = process.env): IlinkConf
     appClientVersion,
     cursorPath: join(directory, "wechat-ilink-sync-buf"),
     credentialsPath: join(directory, "wechat-ilink-credentials.json"),
+    contextPath: join(directory, "wechat-ilink-contexts.json"),
     ...(controlToken === undefined ? {} : { controlToken }),
     controlPort,
   };
@@ -170,6 +180,35 @@ export async function forwardInbound(config: GatewayConfig, inbound: Inbound): P
   const body = record(value);
   if (body?.accepted !== true || (body.reply !== undefined && typeof body.reply !== "string")) throw new Error("Hub inbound response is invalid");
   return { accepted: true, ...(body.duplicate === true ? { duplicate: true } : {}), ...(typeof body.reply === "string" ? { reply: body.reply } : {}) };
+}
+
+export async function pullChannelNotification(config: GatewayConfig, channel: Channel): Promise<HubChannelNotification | undefined> {
+  const token = config.tokens[channel];
+  if (token === undefined) throw new Error(`${channel} adapter is disabled: no ingest credential`);
+  const response = await fetch(new URL(`/v2/channels/${channel}/outbox`, config.hubUrl), {
+    method: "GET", redirect: "error", headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000),
+  });
+  const value = record(await boundedJson(response, "Hub channel outbox"));
+  if (!response.ok) throw new Error(`Hub rejected ${channel} outbox pull (${response.status})`);
+  if (value?.notification === null) return undefined;
+  const notification = record(value?.notification);
+  if (
+    typeof notification?.notificationId !== "string" || typeof notification.leaseId !== "string" ||
+    notification.channel !== channel || typeof notification.senderId !== "string" || typeof notification.text !== "string"
+  ) throw new Error("Hub channel outbox response is invalid");
+  return notification as unknown as HubChannelNotification;
+}
+
+export async function acknowledgeChannelNotification(config: GatewayConfig, notification: HubChannelNotification): Promise<void> {
+  const token = config.tokens[notification.channel];
+  if (token === undefined) throw new Error(`${notification.channel} adapter is disabled: no ingest credential`);
+  const endpoint = new URL(`/v2/channels/${notification.channel}/outbox/${notification.notificationId}/ack`, config.hubUrl);
+  const response = await fetch(endpoint, {
+    method: "POST", redirect: "error", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ leaseId: notification.leaseId }), signal: AbortSignal.timeout(20_000),
+  });
+  const value = record(await boundedJson(response, "Hub channel outbox acknowledgement"));
+  if (!response.ok || value?.delivered !== true) throw new Error(`Hub rejected ${notification.channel} outbox acknowledgement (${response.status})`);
 }
 
 /** Starts only when both a Telegram bot token and Hub-scoped ingest token are configured. */
@@ -243,12 +282,12 @@ export async function pollIlinkOnce(config: IlinkConfig, cursor: string, signal:
 }
 
 /** Sends the Friday reply through the official iLink sendmessage contract. */
-export async function sendIlinkText(config: IlinkConfig, credentials: IlinkCredentials, inbound: Inbound, text: string, signal: AbortSignal): Promise<void> {
+export async function sendIlinkText(config: IlinkConfig, credentials: IlinkCredentials, inbound: Inbound, text: string, signal: AbortSignal, clientId = `friday-${inbound.messageId}`): Promise<void> {
   if (text.trim() === "" || Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) throw new Error("iLink reply is invalid");
   const endpoint = new URL("ilink/bot/sendmessage", ensureTrailingSlash(new URL(credentials.baseUrl)));
   const body = JSON.stringify({
     msg: {
-      from_user_id: "", to_user_id: inbound.senderId, client_id: `friday-${randomUUID()}`,
+      from_user_id: "", to_user_id: inbound.senderId, client_id: clientId,
       message_type: 2, message_state: 2,
       item_list: [{ type: 1, text_item: { text } }],
       ...(inbound.contextToken === undefined ? {} : { context_token: inbound.contextToken }),
@@ -257,7 +296,10 @@ export async function sendIlinkText(config: IlinkConfig, credentials: IlinkCrede
   });
   const response = await fetch(endpoint, { method: "POST", redirect: "error", headers: ilinkHeaders(config, credentials.botToken), body, signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]) });
   const value = record(await boundedJson(response, "iLink sendmessage"));
-  if (!response.ok || (value?.ret !== undefined && value.ret !== 0)) throw new Error(`iLink sendmessage failed (${response.status})`);
+  if (value === undefined) throw new Error(`iLink sendmessage returned an invalid response (http=${response.status})`);
+  const ret = value.ret === undefined ? 0 : typeof value.ret === "number" ? value.ret : Number.NaN;
+  const errcode = value.errcode === undefined ? 0 : typeof value.errcode === "number" ? value.errcode : Number.NaN;
+  if (!response.ok || ret !== 0 || errcode !== 0) throw new Error(`iLink sendmessage failed (http=${response.status}, ret=${ret}, errcode=${errcode})`);
 }
 
 /** Long-polls iLink, invokes Friday Conversation, sends the reply, then advances the cursor. */
@@ -271,6 +313,9 @@ export async function wechatIlinkLongPoll(config: GatewayConfig, ilink: IlinkCon
       const result = await pollIlinkOnce(ilink, cursor, signal, credentials);
       for (const message of result.messages) {
         const accepted = await forwardInbound(config, message);
+        // Hub acceptance proves this is the paired Owner, so an unpaired sender
+        // can never replace the private context used for later notifications.
+        if (message.contextToken !== undefined) await writeIlinkContext(ilink.contextPath, message.senderId, message.contextToken);
         if (accepted.reply !== undefined) await sendIlinkText(ilink, credentials, message, accepted.reply, signal);
       }
       if (result.nextCursor !== cursor) await writeIlinkCursor(ilink.cursorPath, result.nextCursor);
@@ -281,6 +326,32 @@ export async function wechatIlinkLongPoll(config: GatewayConfig, ilink: IlinkCon
       await abortableDelay(5_000, signal);
     }
   }
+}
+
+export async function channelOutboxLoop(config: GatewayConfig, channel: Channel, signal: AbortSignal, deliver: (notification: HubChannelNotification) => Promise<void>): Promise<void> {
+  while (!signal.aborted) {
+    try {
+      const notification = await pullChannelNotification(config, channel);
+      if (notification === undefined) { await abortableDelay(2_000, signal); continue; }
+      await deliver(notification);
+      await acknowledgeChannelNotification(config, notification);
+    } catch (caught) {
+      if (signal.aborted) return;
+      process.stderr.write(`[gateway] ${channel} outbox delivery failed: ${safeError(caught)}\n`);
+      await abortableDelay(5_000, signal);
+    }
+  }
+}
+
+async function deliverIlinkNotification(config: IlinkConfig, notification: HubChannelNotification, signal: AbortSignal): Promise<void> {
+  const credentials = await readIlinkCredentials(config);
+  if (credentials === undefined) throw new Error("iLink is not paired");
+  const contextToken = await readIlinkContext(config.contextPath, notification.senderId);
+  if (contextToken === undefined) throw new Error("iLink reply context is unavailable; send Friday a new direct message to refresh it");
+  await sendIlinkText(config, credentials, {
+    channel: "wechat_ilink", messageId: notification.notificationId, senderId: notification.senderId,
+    group: false, text: notification.text, contextToken,
+  }, notification.text, signal, `friday-${notification.notificationId}`);
 }
 
 /** Loopback-only QR control server. The Hub proxies this behind Owner authentication. */
@@ -440,7 +511,7 @@ function ilinkHeaders(config: IlinkConfig, botToken?: string): Record<string, st
   };
 }
 
-function baseInfo(config: IlinkConfig): Record<string, string> { return { channel_version: config.channelVersion, bot_agent: "FridayAgent/0.1.0" }; }
+function baseInfo(config: IlinkConfig): Record<string, string> { return { channel_version: config.channelVersion, bot_agent: "FridayAgent/0.1.1" }; }
 function randomWechatUin(): string { return Buffer.from(String(randomBytes(4).readUInt32BE(0)), "utf8").toString("base64"); }
 function ensureTrailingSlash(url: URL): string { return url.toString().endsWith("/") ? url.toString() : `${url.toString()}/`; }
 function isLoopback(url: URL): boolean { return url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost"; }
@@ -475,6 +546,32 @@ async function readIlinkCursor(path: string): Promise<string> {
 }
 
 async function writeIlinkCursor(path: string, value: string): Promise<void> { await atomicPrivateWrite(path, value); }
+
+async function readIlinkContext(path: string, senderId: string): Promise<string | undefined> {
+  try {
+    const raw = await readFile(path, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > 64 * 1024) throw new Error("iLink context file is too large");
+    const contexts = record(JSON.parse(raw));
+    const context = contexts?.[senderId];
+    return typeof context === "string" && context.length <= 16 * 1024 && !context.includes("\0") ? context : undefined;
+  } catch (caught) {
+    if ((caught as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw caught;
+  }
+}
+
+async function writeIlinkContext(path: string, senderId: string, contextToken: string): Promise<void> {
+  if (senderId.trim() === "" || senderId.length > 256 || contextToken.length > 16 * 1024 || contextToken.includes("\0")) throw new Error("iLink reply context is invalid");
+  let contexts: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(path, "utf8");
+    if (Buffer.byteLength(raw, "utf8") > 64 * 1024) throw new Error("iLink context file is too large");
+    contexts = record(JSON.parse(raw)) ?? {};
+  } catch (caught) {
+    if ((caught as NodeJS.ErrnoException).code !== "ENOENT") throw caught;
+  }
+  await atomicPrivateWrite(path, JSON.stringify({ ...contexts, [senderId]: contextToken }));
+}
 
 async function atomicPrivateWrite(path: string, value: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -523,8 +620,14 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathS
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort()); process.once("SIGINT", () => controller.abort());
   const adapters: Promise<unknown>[] = [];
-  if (telegramBot !== undefined && config.tokens.telegram !== undefined) adapters.push(telegramLongPoll(config, telegramBot, controller.signal));
-  if (ilink !== undefined && config.tokens.wechat_ilink !== undefined) adapters.push(wechatIlinkLongPoll(config, ilink, controller.signal));
+  if (telegramBot !== undefined && config.tokens.telegram !== undefined) {
+    adapters.push(telegramLongPoll(config, telegramBot, controller.signal));
+    adapters.push(channelOutboxLoop(config, "telegram", controller.signal, (notification) => sendTelegramText(telegramBot, { channel: "telegram", messageId: notification.notificationId, senderId: notification.senderId, group: false, text: notification.text }, notification.text, controller.signal)));
+  }
+  if (ilink !== undefined && config.tokens.wechat_ilink !== undefined) {
+    adapters.push(wechatIlinkLongPoll(config, ilink, controller.signal));
+    adapters.push(channelOutboxLoop(config, "wechat_ilink", controller.signal, (notification) => deliverIlinkNotification(ilink, notification, controller.signal)));
+  }
   if (ilink?.controlToken !== undefined) adapters.push(startIlinkControlServer(ilink, controller.signal));
   if (adapters.length === 0) process.stdout.write("channel gateway disabled: incomplete provider credentials\n");
   else await Promise.all(adapters);

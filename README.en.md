@@ -4,13 +4,13 @@ English | [中文](README.md)
 
 Friday Agent is a single-owner, self-hosted steward for private devices. You talk to it through the Web UI, WeChat iLink, or Telegram. The Hub owns identity, policy, audit, and scheduling; lightweight Runners execute approved jobs on managed nodes. Models never receive general SSH, root, the Docker socket, or long-lived provider credentials.
 
-> Current release: `v0.1.0`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
+> Current release: `v0.1.1`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
 
 ## What it does
 
 - Provides a Web console for chat, devices, jobs, diffs, artifacts, and clearance requests.
 - Accepts text, images, and short videos, plus continuous browser speech recognition, read-aloud replies, and barge-in where supported.
-- Sends and receives paired private chats through WeChat iLink and one-owner Telegram Bots.
+- Sends and receives paired private chats through WeChat iLink and one-owner Telegram Bots. When a remote task completes, fails, or is cancelled, the Gateway durably retries delivery of its terminal state and bounded result summary.
 - Selects an enrolled, online, capability-matched node and runs pinned Codex, Pi, or Claude Code inside an isolated Git worktree and no-network sandbox.
 - Exposes bounded web search to the Hub. MCP, Skills, and Procedures remain disabled until their source, version, capabilities, and replay evidence are approved.
 - Allows an external model to propose Pi upgrades and architecture changes, but only as isolated patches with test evidence. Networked installs, restarts, deployments, credentials, root access, and deletion require an R2/R3 clearance that explains context, risk, and rollback.
@@ -127,6 +127,6 @@ More detail:
 
 The validated core covers Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, browser talk, real sandboxed Codex/Pi/Claude calls, short-lived credential proxying, and Self Improvement test evidence with R2/R3 clearance and canary gates.
 
-`v0.1.0` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
+`v0.1.1` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
 
 Licensed under the [Apache License 2.0](LICENSE). Friday Agent is not affiliated with or endorsed by WeChat, Telegram, OpenAI, Anthropic, or the Pi project; external services remain subject to their own terms.

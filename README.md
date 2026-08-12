@@ -4,13 +4,13 @@
 
 Friday Agent 是一个单用户、自托管的私人设备管家。你通过 Web、微信 iLink 或 Telegram 和它对话；Hub 负责身份、策略、审计和调度，轻量 Runner 在受控节点上执行任务。模型不会直接拿到 SSH、Root、Docker socket 或长期供应商密钥。
 
-> 当前版本：`v0.1.0`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
+> 当前版本：`v0.1.1`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
 
 ## 它能做什么
 
 - 用 Web 控制台对话，查看设备、任务、Diff、制品和待授权操作。
 - 接收文字、图片和短视频；在受支持的浏览器中连续语音识别、朗读和开口打断。
-- 在微信 iLink 扫码绑定后收发私聊；通过 Telegram Bot 接受唯一 Owner 的私聊。
+- 在微信 iLink 扫码绑定后收发私聊；通过 Telegram Bot 接受唯一 Owner 的私聊。远端任务完成、失败或取消后，Gateway 会持久化重试并回推终态和有界结果摘要。
 - 自动选择已登记、在线且能力匹配的节点，在独立 Git Worktree 和无网络 Sandbox 中调用固定版本的 Codex、Pi 或 Claude Code。
 - 通过 Hub 提供受限网络搜索；MCP、Skill 和 Procedure 默认关闭，启用前需要来源、版本、能力和回放证据。
 - 让外部模型提出 Pi 升级或架构改进，但只能先生成隔离补丁和测试证据。涉及联网安装、重启、部署、凭据、Root 或删除时，Friday 必须说明背景、风险和回滚方案，并申请 R2/R3 clearance。
@@ -181,7 +181,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 已验证的核心包括：Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器对讲，Codex/Pi/Claude 真实 Sandbox 调用，短时模型凭据代理，以及 Self Improvement 的测试证据、R2/R3 clearance 和 Canary 门禁。
 
-`v0.1.0` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
+`v0.1.1` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
 
 ## License
 

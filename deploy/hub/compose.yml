@@ -3,7 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/hub/Dockerfile
-    image: friday-agent-hub:0.1.0
+    image: friday-agent-hub:0.1.1
     container_name: friday-hub
     network_mode: host
     user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"
@@ -41,7 +41,7 @@ services:
         max-size: 10m
         max-file: "3"
   channel-gateway:
-    image: friday-agent-hub:0.1.0
+    image: friday-agent-hub:0.1.1
     container_name: friday-channel-gateway
     network_mode: host
     user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"
@@ -71,7 +71,7 @@ services:
         max-file: "3"
   mcp-broker:
     profiles: ["mcp"]
-    image: friday-agent-hub:0.1.0
+    image: friday-agent-hub:0.1.1
     container_name: friday-mcp-broker
     network_mode: host
     user: "${FRIDAY_UID:?set FRIDAY_UID in deploy/hub/.env}:${FRIDAY_GID:?set FRIDAY_GID in deploy/hub/.env}"

@@ -2,6 +2,13 @@
 
 All notable changes to Friday Agent are documented here.
 
+## 0.1.1 - 2026-08-12
+
+### Fixed
+
+- Persist channel-bound task completion and failure notifications in the Hub, then deliver and acknowledge them through the WeChat iLink or Telegram gateway with restart-safe retries.
+- Preserve iLink reply context privately in the Gateway, reject non-zero provider `errcode` responses, and make provider retries idempotent without executing a replayed inbound task twice.
+
 ## 0.1.0 - 2026-08-12
 
 Initial public release.

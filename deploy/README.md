@@ -67,7 +67,7 @@ sudo ./deploy/hub/install-hub.sh \
 - 创建 `friday-hub` 低权限系统用户；
 - 创建 `/var/lib/friday-hub/state` 与 `/var/lib/friday-channel-gateway`，权限 `0700`；
 - 生成 `deploy/hub/.env`、`deploy/hub/hub.env` 和 `deploy/gateway/gateway.env`，权限 `0600`；
-- 构建 `friday-agent-hub:0.1.0`，启动 Hub 和 Channel Gateway；
+- 构建 `friday-agent-hub:0.1.1`，启动 Hub 和 Channel Gateway；
 - 为 iLink 生成作用域化 ingest token；
 - Tailscale 模式执行 `tailscale serve --bg --https=443`，不执行 Funnel；
 - 只在终端输出一次 Web 密码与 Owner Token。
@@ -222,6 +222,7 @@ journalctl -u friday-sandboxd.service -n 100 --no-pager
 - 三种 CLI 到达正确的兼容 Provider 路由；
 - Sandbox/Worktree 隔离和制品摘要通过；
 - Web 能看到终态、日志摘要和 Diff；
+- 由微信 iLink 或 Telegram 发起的任务能在终态后收到回推；短时渠道故障恢复后不会重复执行任务；
 - fixture Worktree 保持零非预期改动。
 
 “服务 active”或“adapter enabled”不等于真实 E2E 已验收。

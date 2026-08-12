@@ -15,6 +15,7 @@ import { loadOrCreateHubIdentity, type HubIdentity } from "./hub-identity.js";
 import { SqliteJobRegistry, type JobCreateInput } from "./job-registry.js";
 import { WebAuthnRegistry } from "./webauthn-registry.js";
 import { ChannelIngestRegistry, MemoryRegistry, OpenAiVoiceClient, VoiceMediaRegistry } from "./m2-registry.js";
+import { ChannelOutbox, JobChannelNotifier, type OutboundChannel } from "./channel-outbox.js";
 import { AdapterRegistry, McpBroker, McpRegistry, ProcedureRegistry, SelfPatchRegistry, SkillRegistry, type AdapterDefinition, type ApprovalRisk, type McpDefinition, type SelfImprovementContext, type SignedProcedure, type SignedSkill } from "./m3-registry.js";
 import { invokeMcpBrokerSidecar } from "./mcp-broker-sidecar.js";
 import { FridayState, jsonDigest, runnerEnvelopeDigest, type JobView } from "./state.js";
@@ -531,6 +532,7 @@ export interface FridayServer {
   readonly voiceMediaRegistry: VoiceMediaRegistry;
   readonly conversationMediaRegistry: ConversationMediaRegistry;
   readonly conversationRegistry: ConversationRegistry;
+  readonly channelOutbox: ChannelOutbox;
   readonly modelAccessBroker?: RunnerModelAccessBroker;
   readonly artifactStore: JobArtifactStore;
   readonly hubIdentity: HubIdentity;
@@ -554,6 +556,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   const modelAccessBroker = config.runnerModelProxy === undefined ? undefined : new RunnerModelAccessBroker(config.runnerModelProxy, jobRegistry);
   const memoryRegistry = new MemoryRegistry(databasePath);
   const channelRegistry = new ChannelIngestRegistry(databasePath);
+  const channelOutbox = new ChannelOutbox(databasePath);
   const voiceMediaRegistry = new VoiceMediaRegistry(databasePath, join(config.stateDir, "voice-media"));
   const conversationMediaRegistry = new ConversationMediaRegistry(databasePath, join(config.stateDir, "conversation-media"));
   const conversationRegistry = new ConversationRegistry(databasePath);
@@ -572,6 +575,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     jobRegistry.open();
     memoryRegistry.open();
     channelRegistry.open();
+    channelOutbox.open();
     voiceMediaRegistry.open();
     conversationMediaRegistry.open();
     conversationRegistry.open();
@@ -584,6 +588,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     webauthnRegistry?.open();
   } catch (caught) {
     webauthnRegistry?.close();
+    channelOutbox.close();
     channelRegistry.close();
     voiceMediaRegistry.close();
     conversationMediaRegistry.close();
@@ -605,6 +610,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     state.rehydrate(store.list());
   } catch (caught) {
     webauthnRegistry?.close();
+    channelOutbox.close();
     channelRegistry.close();
     voiceMediaRegistry.close();
     conversationMediaRegistry.close();
@@ -629,6 +635,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     (message) => console.error(JSON.stringify({ level: "warn", event: "self-improvement.promotion", message })),
   );
   await selfImprovementCoordinator.reconcile();
+  const jobChannelNotifier = new JobChannelNotifier(channelOutbox, jobRegistry);
+  jobChannelNotifier.reconcile();
   const conversationAgent = options.conversationAgent === null
     ? undefined
     : options.conversationAgent ?? conversationAgentFromConfig(config);
@@ -898,7 +906,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         json(response, 200, {
           status: "ok",
           service: "fridayd",
-          version: "0.1.0",
+          version: "0.1.1",
           protocolVersion: PROTOCOL_VERSION,
         });
         return;
@@ -918,6 +926,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       const isPublicWeb = method === "GET" && (url.pathname === "/" || url.pathname === "/app");
       const isPublicWebAsset = method === "GET" && (url.pathname === "/assets/friday.css" || url.pathname === "/assets/friday.js");
       const isChannelInbound = method === "POST" && url.pathname === "/v2/inbound";
+      const isChannelOutbox = /^\/v2\/channels\/(telegram|wechat_ilink)\/outbox(?:\/[0-9a-f-]+\/ack)?$/i.test(url.pathname) && (method === "GET" || method === "POST");
       if (
         !isRunnerRegistration &&
         !isRunnerHeartbeat &&
@@ -932,6 +941,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         !isPublicWeb &&
         !isPublicWebAsset &&
         !isChannelInbound &&
+        !isChannelOutbox &&
         !ownerAuthorized(request, method)
       ) {
         error(response, 401, "UNAUTHORIZED", "A valid bearer token is required");
@@ -1297,14 +1307,19 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const body = await parseJsonBody(request, config.maxBodyBytes);
         if (!isRecord(body.value) || typeof body.value.channel !== "string" || typeof body.value.token !== "string" || typeof body.value.senderId !== "string" || typeof body.value.messageId !== "string" || typeof body.value.group !== "boolean" || typeof body.value.text !== "string") { error(response,400,"INVALID_INBOUND","Inbound message is invalid"); return; }
         const inbound = { channel: body.value.channel, token: body.value.token, senderId: body.value.senderId, messageId: body.value.messageId, group: body.value.group, text: body.value.text };
-        if (!channelRegistry.accept(inbound.channel,inbound.token,inbound.senderId,inbound.messageId,inbound.group)) { error(response,401,"INBOUND_REJECTED","Channel is unpaired, replayed, grouped, or unauthorized"); return; }
-        await mutate(async()=>{ await store.append("channel.inbound",{channel:inbound.channel,messageId:inbound.messageId,senderId:inbound.senderId,textDigest:jsonDigest(inbound.text)}); });
+        const acceptance = channelRegistry.accept(inbound.channel,inbound.token,inbound.senderId,inbound.messageId,inbound.group);
+        if (acceptance === "rejected") { error(response,401,"INBOUND_REJECTED","Channel is unpaired, grouped, or unauthorized"); return; }
+        if (acceptance === "new") await mutate(async()=>{ await store.append("channel.inbound",{channel:inbound.channel,messageId:inbound.messageId,senderId:inbound.senderId,textDigest:jsonDigest(inbound.text)}); });
         if (conversationOrchestrator === undefined || (inbound.channel !== "telegram" && inbound.channel !== "wechat_ilink")) {
-          json(response,202,{accepted:true}); return;
+          json(response,202,{accepted:true,duplicate:acceptance === "replay"}); return;
         }
         const conversationId = `${inbound.channel}-${jsonDigest(inbound.senderId).slice(0, 24)}`;
         try {
           const result = await conversationOrchestrator.submit({ conversationId, messageId: inbound.messageId, channel: inbound.channel, text: inbound.text });
+          if (result.turn.jobId !== undefined) {
+            jobChannelNotifier.bind(result.turn.jobId, inbound.channel as OutboundChannel, inbound.senderId);
+            jobChannelNotifier.observe(result.turn.jobId);
+          }
           json(response, 202, { accepted: true, duplicate: result.duplicate, reply: result.turn.assistantReply, scheduling: result.scheduling });
         } catch (caught) {
           if (caught instanceof ConversationMessageConflictError) { error(response, 409, "MESSAGE_ID_CONFLICT", caught.message); return; }
@@ -1314,6 +1329,27 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           }
           throw caught;
         }
+        return;
+      }
+
+      const channelOutboxMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink)\/outbox$/i);
+      if (method === "GET" && channelOutboxMatch?.[1] !== undefined) {
+        const channel = channelOutboxMatch[1].toLowerCase() as OutboundChannel;
+        const token = singleHeader(request.headers.authorization)?.replace(/^Bearer /, "") ?? "";
+        if (!channelRegistry.authorize(channel, token)) { error(response, 401, "CHANNEL_AUTH_REQUIRED", "A valid channel ingest token is required"); return; }
+        json(response, 200, { notification: channelOutbox.pull(channel) ?? null });
+        return;
+      }
+
+      const channelOutboxAckMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink)\/outbox\/([0-9a-f-]+)\/ack$/i);
+      if (method === "POST" && channelOutboxAckMatch?.[1] !== undefined && channelOutboxAckMatch[2] !== undefined) {
+        const channel = channelOutboxAckMatch[1].toLowerCase() as OutboundChannel;
+        const token = singleHeader(request.headers.authorization)?.replace(/^Bearer /, "") ?? "";
+        if (!channelRegistry.authorize(channel, token)) { error(response, 401, "CHANNEL_AUTH_REQUIRED", "A valid channel ingest token is required"); return; }
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        if (!isRecord(body.value) || Object.keys(body.value).length !== 1 || typeof body.value.leaseId !== "string") { error(response, 400, "INVALID_NOTIFICATION_ACK", "The exact notification leaseId is required"); return; }
+        if (!channelOutbox.acknowledge(channel, channelOutboxAckMatch[2].toLowerCase(), body.value.leaseId)) { error(response, 409, "NOTIFICATION_ACK_REJECTED", "Notification lease does not match"); return; }
+        json(response, 200, { delivered: true });
         return;
       }
 
@@ -1713,7 +1749,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (method === "POST" && stopMatch?.[1] !== undefined) {
         const body = await parseJsonBody(request, config.maxBodyBytes);
         if (!isEmptyObject(body.value)) { error(response, 400, "INVALID_JOB_STOP", "Body must be an empty JSON object"); return; }
-        try { const jobId = stopMatch[1].toLowerCase(); const job = jobRegistry.cancel(jobId); modelAccessBroker?.revokeJob(jobId); json(response, 200, { stopped: true, job }); } catch (caught) { error(response, 409, "JOB_NOT_STOPPABLE", caught instanceof Error ? caught.message : "Job cannot be stopped"); }
+        try { const jobId = stopMatch[1].toLowerCase(); const job = jobRegistry.cancel(jobId); modelAccessBroker?.revokeJob(jobId); jobChannelNotifier.observe(jobId); json(response, 200, { stopped: true, job }); } catch (caught) { error(response, 409, "JOB_NOT_STOPPABLE", caught instanceof Error ? caught.message : "Job cannot be stopped"); }
         return;
       }
 
@@ -1814,6 +1850,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         try {
           const result = jobRegistry.acceptEvent(event);
           if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(result.job.status)) modelAccessBroker?.revokeJob(jobId);
+          if (!result.duplicate) jobChannelNotifier.observe(jobId);
           const promotion = await selfImprovementCoordinator.observe(jobId);
           json(response, result.duplicate ? 200 : 202, { accepted: true, duplicate: result.duplicate, job: result.job, ...(promotion === undefined ? {} : { selfImprovement: promotion }) });
         } catch (caught) {
@@ -2159,6 +2196,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     voiceMediaRegistry,
     conversationMediaRegistry,
     conversationRegistry,
+    channelOutbox,
     ...(modelAccessBroker === undefined ? {} : { modelAccessBroker }),
     artifactStore,
     hubIdentity,
@@ -2168,6 +2206,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const onError = (caught: Error): void => {
           server.off("error", onError);
           webauthnRegistry?.close();
+          channelOutbox.close();
           channelRegistry.close();
           voiceMediaRegistry.close();
           conversationMediaRegistry.close();
@@ -2193,6 +2232,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           if (address === null || typeof address === "string") {
             const addressError = new Error("fridayd did not bind a TCP address");
             webauthnRegistry?.close();
+            channelOutbox.close();
             channelRegistry.close();
             voiceMediaRegistry.close();
             conversationMediaRegistry.close();
@@ -2224,6 +2264,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       await mutationBarrier;
       await conversationOrchestrator?.close();
       webauthnRegistry?.close();
+      channelOutbox.close();
       channelRegistry.close();
       voiceMediaRegistry.close();
       conversationMediaRegistry.close();

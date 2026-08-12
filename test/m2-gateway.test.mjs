@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createFridayServer } from "../apps/fridayd/dist/server.js";
-import { loadIlinkConfig, pollIlinkOnce, sendIlinkText, sendTelegramText, startIlinkControlServer, telegramInbound, wechatIlinkInbound } from "../apps/channel-gateway/dist/index.js";
+import { acknowledgeChannelNotification, loadIlinkConfig, pollIlinkOnce, pullChannelNotification, sendIlinkText, sendTelegramText, startIlinkControlServer, telegramInbound, wechatIlinkInbound } from "../apps/channel-gateway/dist/index.js";
 
 test("M2 Hub accepts only paired channel ingress and durable replay rejection", async (t) => {
   const stateDir=await mkdtemp(join(tmpdir(),"m2-hub-"));t.after(()=>rm(stateDir,{recursive:true,force:true}));
@@ -15,7 +15,12 @@ test("M2 Hub accepts only paired channel ingress and durable replay rejection", 
   const rotate=await fetch(`${base}/v2/channels/rotate`,{method:"POST",headers:owner,body:JSON.stringify({channel:"telegram"})});const {token}=await rotate.json();assert.equal(typeof token,"string");
   assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({channel:"telegram",token,senderId:"owner",messageId:randomUUID(),group:false,text:"before pairing"})})).status,401);
   assert.equal((await fetch(`${base}/v2/channels/pair`,{method:"POST",headers:owner,body:JSON.stringify({channel:"telegram",senderId:"owner"})})).status,200);
-  const messageId=randomUUID();const body=JSON.stringify({channel:"telegram",token,senderId:"owner",messageId,group:false,text:"hello"});assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body})).status,202);assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body})).status,401);
+  const messageId=randomUUID();const body=JSON.stringify({channel:"telegram",token,senderId:"owner",messageId,group:false,text:"hello"});assert.equal((await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body})).status,202);const replay=await fetch(`${base}/v2/inbound`,{method:"POST",headers:{"content-type":"application/json"},body});assert.equal(replay.status,202);assert.equal((await replay.json()).duplicate,true);
+  const notificationJob=server.jobRegistry.create({idempotencyKey:randomUUID(),runnerId:randomUUID(),workspaceId:"infra",tool:"diagnostic",operation:"diagnose",prompt:"inspect"}).job;server.channelOutbox.bindJob(notificationJob.jobId,"telegram","owner");assert.equal(server.channelOutbox.enqueueTerminal(notificationJob.jobId,"任务已完成。"),true);
+  assert.equal((await fetch(`${base}/v2/channels/telegram/outbox`)).status,401);
+  const delivery=await fetch(`${base}/v2/channels/telegram/outbox`,{headers:{authorization:`Bearer ${token}`}});assert.equal(delivery.status,200);const deliveryBody=await delivery.json();assert.equal(deliveryBody.notification.text,"任务已完成。");
+  const badAck=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:randomUUID()})});assert.equal(badAck.status,409);
+  const ack=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:deliveryBody.notification.leaseId})});assert.equal(ack.status,200);assert.equal((await ack.json()).delivered,true);
 });
 test("Telegram and iLink provider fixtures normalize only direct messages", () => {
   assert.equal(telegramInbound({ message: { message_id: 7, text: "hi", chat: { type: "private" }, from: { id: 12 } } })?.channel, "telegram");
@@ -67,9 +72,9 @@ test("iLink adapter uses the official getupdates contract and is disabled withou
   const stateDir = await mkdtemp(join(tmpdir(), "m2-ilink-")); t.after(() => rm(stateDir, { recursive: true, force: true }));
   const config = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${port}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-ilink-token-value", FRIDAY_GATEWAY_STATE_DIR: stateDir });
   const result = await pollIlinkOnce(config, "prior-cursor", AbortSignal.timeout(1_000));
-  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.1.0", bot_agent: "FridayAgent/0.1.0" } });
+  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.1.1", bot_agent: "FridayAgent/0.1.1" } });
   assert.equal(authorizationType, "ilink_bot_token"); assert.equal(authorization, "Bearer private-ilink-token-value");
-  assert.equal(appId, "bot"); assert.equal(appClientVersion, "256");
+  assert.equal(appId, "bot"); assert.equal(appClientVersion, "257");
   assert.deepEqual(result, { nextCursor: "next-cursor", messages: [{ channel: "wechat_ilink", messageId: result.messages[0].messageId, senderId: "owner", group: false, text: "from ilink" }] });
 });
 
@@ -126,4 +131,32 @@ test("iLink sendmessage preserves the provider reply context and QR control pers
   const directConfig = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${providerPort}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-direct-ilink-token", FRIDAY_GATEWAY_STATE_DIR: stateDir });
   await sendIlinkText(directConfig, { botToken: "private-direct-ilink-token", baseUrl: `http://127.0.0.1:${providerPort}/` }, { channel: "wechat_ilink", messageId: "018f6f57-51d4-7b48-a3a3-c5e8b194aaf2", senderId: "owner-wechat", group: false, text: "hello", contextToken: "private-reply-context" }, "Friday reply", AbortSignal.timeout(1_000));
   assert.equal(sentBody.msg.to_user_id, "owner-wechat"); assert.equal(sentBody.msg.context_token, "private-reply-context"); assert.equal(sentBody.msg.item_list[0].text_item.text, "Friday reply");
+});
+
+test("iLink sendmessage rejects a non-zero provider errcode even on HTTP 200", async (t) => {
+  const provider = createServer((request, response) => { request.resume(); request.on("end", () => { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ ret: 0, errcode: -14 })); }); });
+  await new Promise((resolve, reject) => { provider.once("error", reject); provider.listen(0, "127.0.0.1", resolve); });
+  t.after(() => new Promise((resolve, reject) => provider.close((error) => error === undefined ? resolve() : reject(error))));
+  const address = provider.address(); const port = typeof address === "object" && address !== null ? address.port : 0;
+  const stateDir = await mkdtemp(join(tmpdir(), "m2-ilink-error-")); t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const config = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${port}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-direct-ilink-token", FRIDAY_GATEWAY_STATE_DIR: stateDir });
+  await assert.rejects(() => sendIlinkText(config, { botToken: "private-direct-ilink-token", baseUrl: `http://127.0.0.1:${port}/` }, { channel: "wechat_ilink", messageId: randomUUID(), senderId: "owner", group: false, text: "hello", contextToken: "context" }, "reply", AbortSignal.timeout(1_000)), /errcode=-14/);
+});
+
+test("Gateway pulls and acknowledges durable channel notifications with its ingest credential", async (t) => {
+  const token = "N".repeat(43); let acknowledged;
+  const hub = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    if (request.method === "GET") { response.end(JSON.stringify({ notification: { notificationId: "018f6f57-51d4-7b48-a3a3-c5e8b194aaf2", channel: "telegram", senderId: "123456789", text: "done", leaseId: "018f6f57-51d4-7b48-a3a3-c5e8b194aaf3" } })); return; }
+    let raw = ""; request.on("data", (chunk) => { raw += chunk; }); request.on("end", () => { acknowledged = JSON.parse(raw); response.end(JSON.stringify({ delivered: true })); });
+  });
+  await new Promise((resolve, reject) => { hub.once("error", reject); hub.listen(0, "127.0.0.1", resolve); });
+  t.after(() => new Promise((resolve, reject) => hub.close((error) => error === undefined ? resolve() : reject(error))));
+  const address = hub.address(); const port = typeof address === "object" && address !== null ? address.port : 0;
+  const config = { hubUrl: new URL(`http://127.0.0.1:${port}/`), tokens: { telegram: token } };
+  const notification = await pullChannelNotification(config, "telegram");
+  assert.equal(notification.text, "done");
+  await acknowledgeChannelNotification(config, notification);
+  assert.deepEqual(acknowledged, { leaseId: notification.leaseId });
 });
