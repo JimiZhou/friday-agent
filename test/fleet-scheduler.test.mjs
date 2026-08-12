@@ -9,7 +9,7 @@ function runner(runnerId, overrides = {}) {
   return {
     nodeId: runnerId,
     displayName: `runner-${runnerId.slice(-1)}`,
-    version: "0.2.0",
+    version: "0.2.1",
     capabilities: ["orchestration", "sandbox"],
     workspaces: ["infra"],
     shellExecution: false,

@@ -54,7 +54,7 @@ export function evaluateFleetRunners(
     .map((runner) => {
       const rejections: FleetRunnerRejection[] = [];
       if (!context.isEnrolled(runner.nodeId)) rejections.push("not-enrolled");
-      if (runner.version !== "0.2.0") rejections.push("incompatible-version");
+      if (runner.version !== "0.2.1") rejections.push("incompatible-version");
       if (!runner.online) rejections.push("offline");
       else if (runner.status !== "online") rejections.push("degraded");
       if (!runner.capabilities.includes("orchestration")) rejections.push("missing-orchestration-capability");

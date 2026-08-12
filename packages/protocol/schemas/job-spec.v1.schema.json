@@ -55,8 +55,7 @@
       "enum": [
         "codex",
         "claude_code",
-        "pi",
-        "diagnostic"
+        "pi"
       ]
     },
     "operation": {

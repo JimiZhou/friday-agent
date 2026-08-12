@@ -44,7 +44,7 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
       sentAt: receivedAt,
       payload: {
         displayName: "fleet-node",
-        version: "0.2.0",
+        version: "0.2.1",
         capabilities: ["orchestration", "sandbox"],
         workspaces: ["infra", "friday-agent"],
         shellExecution: false,

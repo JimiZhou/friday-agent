@@ -4,7 +4,7 @@ English | [中文](README.md)
 
 Friday Agent is a single-owner, self-hosted steward for private devices. You talk to it through the Web UI, WeChat iLink, or Telegram. The Hub owns identity, policy, audit, and scheduling; lightweight Runners execute approved jobs on managed nodes. Models never receive general SSH, root, the Docker socket, or long-lived provider credentials.
 
-> Current release: `v0.2.0`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
+> Current release: `v0.2.1`, intended for early adopters who are comfortable self-hosting and reviewing security boundaries. The first release exposes only the Web UI, WeChat iLink, and Telegram Bot as user-facing channels.
 
 ## What it does
 
@@ -130,6 +130,6 @@ More detail:
 
 The validated core covers Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, browser talk, a general Remote Agent with per-call Node Tool policy, sandbox HTTP contracts for pinned Codex/Pi/Claude CLIs, a multi-step loop with real node tools, short-lived credential proxying, and Self Improvement test evidence with R2/R3 clearance and canary gates. Public tests use a controlled model fixture; every production deployment must still complete a read-only Remote Agent E2E with its own provider.
 
-`v0.2.0` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
+`v0.2.1` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
 
 Licensed under the [Apache License 2.0](LICENSE). Friday Agent is not affiliated with or endorsed by WeChat, Telegram, OpenAI, Anthropic, or the Pi project; external services remain subject to their own terms.

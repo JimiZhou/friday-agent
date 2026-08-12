@@ -37,7 +37,7 @@ async function registerFleetRunner(friday, workspaceId = "infra") {
   for (const envelope of [
     {
       protocolVersion: "1", envelopeId: randomUUID(), kind: "register", runnerId, sentAt: receivedAt,
-      payload: { displayName: "private-node", version: "0.2.0", capabilities: ["orchestration", "sandbox"], workspaces: [workspaceId], shellExecution: false },
+      payload: { displayName: "private-node", version: "0.2.1", capabilities: ["orchestration", "sandbox"], workspaces: [workspaceId], shellExecution: false },
     },
     {
       protocolVersion: "1", envelopeId: randomUUID(), kind: "heartbeat", runnerId, sentAt: receivedAt,

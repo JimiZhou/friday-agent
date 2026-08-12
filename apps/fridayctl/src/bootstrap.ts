@@ -225,7 +225,7 @@ export async function createRunnerRelease(repoRoot: string, outputDirectory: str
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "runner", "friday-runner-managed@.service"), join(releaseRoot, "friday-runner-managed@.service"));
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
-  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.2.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   const archive = join(outputDirectory, "friday-runner.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);
@@ -255,7 +255,7 @@ export async function createSandboxdRelease(repoRoot: string, outputDirectory: s
   await cp(join(root, "deploy", "sandboxd", "agent"), join(releaseRoot, "agent"), { recursive: true });
   await cp(join(root, "deploy", "sandboxd", "friday-sandboxd.service"), join(releaseRoot, "friday-sandboxd.service"));
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
-  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.2.0", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   const archive = join(outputDirectory, "friday-sandboxd.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);

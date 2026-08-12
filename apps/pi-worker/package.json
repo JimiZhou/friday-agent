@@ -1,6 +1,6 @@
 {
   "name": "@friday/pi-worker",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Strict JSONL isolation boundary for Friday's pinned Pi worker",
   "type": "module",
@@ -19,6 +19,6 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",
-    "@friday/protocol": "0.2.0"
+    "@friday/protocol": "0.2.1"
   }
 }

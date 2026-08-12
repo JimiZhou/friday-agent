@@ -1,6 +1,6 @@
 {
   "name": "@friday/fridayd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "type": "module",
   "bin": {
@@ -11,7 +11,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@friday/protocol": "0.2.0",
+    "@friday/protocol": "0.2.1",
     "@simplewebauthn/server": "13.3.2",
     "ajv": "8.20.0",
     "qrcode": "1.5.4"

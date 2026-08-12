@@ -72,9 +72,9 @@ test("iLink adapter uses the official getupdates contract and is disabled withou
   const stateDir = await mkdtemp(join(tmpdir(), "m2-ilink-")); t.after(() => rm(stateDir, { recursive: true, force: true }));
   const config = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${port}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-ilink-token-value", FRIDAY_GATEWAY_STATE_DIR: stateDir });
   const result = await pollIlinkOnce(config, "prior-cursor", AbortSignal.timeout(1_000));
-  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.2.0", bot_agent: "FridayAgent/0.2.0" } });
+  assert.deepEqual(requestBody, { get_updates_buf: "prior-cursor", base_info: { channel_version: "0.2.1", bot_agent: "FridayAgent/0.2.1" } });
   assert.equal(authorizationType, "ilink_bot_token"); assert.equal(authorization, "Bearer private-ilink-token-value");
-  assert.equal(appId, "bot"); assert.equal(appClientVersion, "512");
+  assert.equal(appId, "bot"); assert.equal(appClientVersion, "513");
   assert.deepEqual(result, { nextCursor: "next-cursor", messages: [{ channel: "wechat_ilink", messageId: result.messages[0].messageId, senderId: "owner", group: false, text: "from ilink" }] });
 });
 

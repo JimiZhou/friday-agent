@@ -4,7 +4,7 @@
 
 Friday Agent 是一个单用户、自托管的私人设备管家。你通过 Web、微信 iLink 或 Telegram 和它对话；Hub 负责身份、策略、审计和调度，轻量 Runner 在受控节点上执行任务。模型不会直接拿到 SSH、Root、Docker socket 或长期供应商密钥。
 
-> 当前版本：`v0.2.0`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
+> 当前版本：`v0.2.1`。面向愿意自行部署和审查安全边界的早期用户。首版外部入口仅包含 Web UI、微信 iLink 和 Telegram Bot。
 
 ## 它能做什么
 
@@ -184,7 +184,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 已验证的核心包括：Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器对讲，通用 Remote Agent 与逐调用 Node Tool Policy，固定 Codex/Pi/Claude CLI 的 Sandbox HTTP 合约，真实节点工具的多步循环，短时模型凭据代理，以及 Self Improvement 的测试证据、R2/R3 clearance 和 Canary 门禁。公开测试使用受控模型 fixture；每次生产部署仍必须使用自己的 Provider 完成只读 Remote Agent E2E。
 
-`v0.2.0` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
+`v0.2.1` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
 
 ## License
 

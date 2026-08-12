@@ -34,8 +34,7 @@ export interface JobViewV2 {
   readonly idempotencyKey: string;
   readonly runnerId: string;
   readonly workspaceId: string;
-  /** `diagnostic` is exposed only when reading pre-Agent historical rows. */
-  readonly tool: JobToolV2 | "diagnostic";
+  readonly tool: JobToolV2;
   readonly operation: "develop" | "diagnose" | "review" | "test";
   readonly risk: JobRiskLevelV2;
   readonly status: JobExecutionStateV2;
@@ -205,13 +204,12 @@ export class SqliteJobRegistry {
     requireUuid(runnerId, "runnerId");
     const database = this.#requireDatabase();
     return this.#transaction(database, () => {
-      const row = database.prepare("SELECT * FROM jobs_v2 WHERE runner_id = ? AND status = 'DISPATCHED' AND tool <> 'diagnostic' ORDER BY created_at LIMIT 1").get(runnerId) as unknown;
+      const row = database.prepare("SELECT * FROM jobs_v2 WHERE runner_id = ? AND status = 'DISPATCHED' ORDER BY created_at LIMIT 1").get(runnerId) as unknown;
       if (!isRecord(row)) return undefined;
       const job = this.#toStored(row);
       const spec = job.spec;
       if (spec === undefined) throw new Error("Dispatched job has no signed spec");
       if (Date.parse(spec.leaseExpiresAt) <= now.getTime()) {
-        if (!isTool(job.tool)) throw new Error("Historical diagnostic Jobs cannot be renewed");
         const renewed = this.#signSpec({ ...job, tool: job.tool, createdAt: job.createdAt }, now);
         database.prepare("UPDATE jobs_v2 SET spec_json = ?, updated_at = ? WHERE job_id = ?").run(JSON.stringify(renewed), now.toISOString(), job.jobId);
         return renewed;
@@ -408,9 +406,7 @@ export class SqliteJobRegistry {
     const status = string("status") as JobExecutionStateV2;
     if (!isRisk(risk) || !isState(status)) throw new Error("Stored job state is invalid");
     const tool = string("tool"); const operation = string("operation");
-    // v0.1.1 and earlier persisted diagnostic fixture Jobs. They remain
-    // readable/auditable but can never be newly created, approved, or pulled.
-    if (!isStoredTool(tool) || !["develop", "diagnose", "review", "test"].includes(operation)) throw new Error("Stored job action is invalid");
+    if (!isTool(tool) || !["develop", "diagnose", "review", "test"].includes(operation)) throw new Error("Stored job action is invalid");
     const limits = JSON.parse(string("limits_json")) as JobLimitsV2;
     validateLimits(limits);
     const specRaw = row.spec_json;
@@ -431,7 +427,6 @@ function normalizeLimits(value: Partial<JobLimitsV2> | undefined): JobLimitsV2 {
 function validateLimits(value: JobLimitsV2): void { if (!Number.isSafeInteger(value.timeoutSeconds) || value.timeoutSeconds < 1 || value.timeoutSeconds > 3600 || !Number.isSafeInteger(value.maxOutputBytes) || value.maxOutputBytes < 1024 || value.maxOutputBytes > 67_108_864 || !Number.isSafeInteger(value.cpuMillis) || value.cpuMillis < 100 || value.cpuMillis > 4000 || !Number.isSafeInteger(value.memoryMiB) || value.memoryMiB < 128 || value.memoryMiB > 8192) throw new Error("Job limits are invalid"); }
 function isRisk(value: string): value is JobRiskLevelV2 { return value === "R0" || value === "R1" || value === "R2" || value === "R3"; }
 function isTool(value: string): value is JobToolV2 { return value === "agent" || value === "codex" || value === "pi" || value === "claude"; }
-function isStoredTool(value: string): value is JobViewV2["tool"] { return value === "diagnostic" || isTool(value); }
 function isState(value: string): value is JobExecutionStateV2 { return ["NEW", "PLANNING", "WAIT_APPROVAL", "DISPATCHED", "RUNNING", "WAIT_USER", "UNKNOWN", "RECONCILING", "SUCCEEDED", "FAILED", "CANCELLED"].includes(value); }
 function transition(current: JobExecutionStateV2, next: JobExecutionStateV2): JobExecutionStateV2 { const allowed: Readonly<Record<JobExecutionStateV2, readonly JobExecutionStateV2[]>> = { NEW: ["PLANNING", "CANCELLED"], PLANNING: ["WAIT_APPROVAL", "DISPATCHED", "FAILED", "CANCELLED"], WAIT_APPROVAL: ["DISPATCHED", "RUNNING", "CANCELLED"], DISPATCHED: ["RUNNING", "UNKNOWN", "CANCELLED"], RUNNING: ["WAIT_APPROVAL", "WAIT_USER", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN", "RECONCILING"], WAIT_USER: ["RUNNING", "CANCELLED", "UNKNOWN"], UNKNOWN: ["RECONCILING", "CANCELLED"], RECONCILING: ["RUNNING", "SUCCEEDED", "FAILED", "CANCELLED", "UNKNOWN"], SUCCEEDED: [], FAILED: [], CANCELLED: [] }; if (current === next || !allowed[current].includes(next)) throw new Error(`Invalid job transition ${current} -> ${next}`); return next; }
 function validateRunnerEvent(event: RunnerJobEventV2): void { if (event.protocolVersion !== JOB_PROTOCOL_VERSION) throw new Error("Unsupported job event protocol"); requireUuid(event.eventId, "eventId"); requireUuid(event.jobId, "jobId"); requireUuid(event.runnerId, "runnerId"); requireUuid(event.leaseId, "leaseId"); if (!Number.isSafeInteger(event.sequence) || event.sequence < 0) throw new Error("Runner event sequence is invalid"); if (event.type === "state" && (event.state === undefined || !isState(event.state))) throw new Error("State event is invalid"); if (event.type === "output" && (event.stream === undefined || typeof event.chunk !== "string" || event.chunk.length > 1_048_576)) throw new Error("Output event is invalid"); if (event.type === "artifact" && event.artifact === undefined) throw new Error("Artifact event is invalid"); if (event.type === "error" && event.error === undefined) throw new Error("Error event is invalid"); }

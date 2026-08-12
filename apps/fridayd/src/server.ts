@@ -688,7 +688,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     for (const runner of state.listRunners()) {
       if (
         !runnerRegistry.isEnrolled(runner.nodeId) ||
-        runner.version !== "0.2.0" ||
+        runner.version !== "0.2.1" ||
         !runner.online ||
         runner.status !== "online" ||
         !runner.capabilities.includes("orchestration") ||
@@ -915,7 +915,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         json(response, 200, {
           status: "ok",
           service: "fridayd",
-          version: "0.2.0",
+          version: "0.2.1",
           protocolVersion: PROTOCOL_VERSION,
         });
         return;

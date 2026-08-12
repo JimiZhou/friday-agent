@@ -120,7 +120,7 @@ export function loadIlinkConfig(env: NodeJS.ProcessEnv = process.env): IlinkConf
   if (controlToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(controlToken)) {
     throw new Error("FRIDAY_GATEWAY_CONTROL_TOKEN must be a 32-byte base64url token");
   }
-  const channelVersion = env.FRIDAY_WECHAT_ILINK_CHANNEL_VERSION ?? "0.2.0";
+  const channelVersion = env.FRIDAY_WECHAT_ILINK_CHANNEL_VERSION ?? "0.2.1";
   if (!/^[A-Za-z0-9._+-]{1,64}$/.test(channelVersion)) throw new Error("FRIDAY_WECHAT_ILINK_CHANNEL_VERSION is invalid");
   const appId = env.FRIDAY_WECHAT_ILINK_APP_ID ?? "bot";
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(appId)) throw new Error("FRIDAY_WECHAT_ILINK_APP_ID is invalid");
@@ -515,7 +515,7 @@ function ilinkHeaders(config: IlinkConfig, botToken?: string): Record<string, st
   };
 }
 
-function baseInfo(config: IlinkConfig): Record<string, string> { return { channel_version: config.channelVersion, bot_agent: "FridayAgent/0.2.0" }; }
+function baseInfo(config: IlinkConfig): Record<string, string> { return { channel_version: config.channelVersion, bot_agent: "FridayAgent/0.2.1" }; }
 function randomWechatUin(): string { return Buffer.from(String(randomBytes(4).readUInt32BE(0)), "utf8").toString("base64"); }
 function ensureTrailingSlash(url: URL): string { return url.toString().endsWith("/") ? url.toString() : `${url.toString()}/`; }
 function isLoopback(url: URL): boolean { return url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost"; }

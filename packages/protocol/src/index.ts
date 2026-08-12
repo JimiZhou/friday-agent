@@ -198,7 +198,7 @@ export type PiWorkerEnvelopeV1 =
   | PiWorkerErrorResponseV1
   | PiWorkerEventV1;
 
-export type JobToolV1 = "codex" | "claude_code" | "pi" | "diagnostic";
+export type JobToolV1 = "codex" | "claude_code" | "pi";
 export type JobOperationV1 =
   | "develop"
   | "diagnose"
@@ -425,8 +425,8 @@ export interface JobNetworkV2 {
 
 /**
  * `agent` is Friday's general remote runtime. It plans against Hub-owned
- * structured node tools; it is not a synonym for a diagnostic fixture.
- * Codex/Pi/Claude remain optional specialist runtimes for isolated worktrees.
+ * structured node tools. Codex/Pi/Claude remain optional specialist runtimes
+ * for isolated worktrees.
  */
 export type JobToolV2 = "agent" | "codex" | "pi" | "claude";
 

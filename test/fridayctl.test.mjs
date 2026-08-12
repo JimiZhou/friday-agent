@@ -128,7 +128,7 @@ test("fridayctl release contains a runnable compiled Runner and no TypeScript so
   });
   assert.deepEqual(JSON.parse(result.stdout), {
     protocolVersion: "1",
-    runnerVersion: "0.2.0",
+    runnerVersion: "0.2.1",
     capabilities: ["orchestration"],
     workspaces: [],
     shellExecution: false,

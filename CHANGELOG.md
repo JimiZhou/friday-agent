@@ -2,6 +2,13 @@
 
 All notable changes to Friday Agent are documented here.
 
+## 0.2.1 - 2026-08-12
+
+### Changed
+
+- Remove the obsolete `diagnostic` Job tool and its historical compatibility path. Existing runtime history is intentionally not migrated; deploy a clean runtime database when upgrading.
+- Bump the Hub, Gateway, Runner, Sandbox, and protocol release to `0.2.1` so the strict Job contract cannot be mixed with `v0.2.0` components.
+
 ## 0.2.0 - 2026-08-12
 
 ### Added
@@ -13,7 +20,7 @@ All notable changes to Friday Agent are documented here.
 ### Security
 
 - Reject expired approval leases without executing the old call; redispatch the Agent under a fresh lease to re-plan.
-- Keep legacy diagnostic Jobs readable for audit but permanently exclude them from new creation and dispatch.
+- The `diagnostic` fixture path is removed from the release; deployments must start from a clean runtime history.
 - Remove the obsolete `fixture-app-server` image from the public deployment tree so it cannot be mistaken for a production Agent runtime.
 - Deny process environments, credential/private-key paths, and sensitive service configuration from file tools; bound recursive search and redact credential-shaped output.
 

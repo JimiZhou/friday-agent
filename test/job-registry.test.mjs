@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, randomUUID, verify } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { randomUUID, verify } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,26 +66,6 @@ test("M1 Job registry requires approval, signs a lease, and rejects sequence gap
   assert.equal(registry.acceptEvent(running).duplicate, true);
   assert.throws(() => registry.acceptEvent({ ...running, eventId: randomUUID(), sequence: 2 }), /gap/);
   assert.equal(registry.reconcile(spec.jobId, spec.runnerId, spec.leaseId).status, "RECONCILING");
-});
-
-test("legacy diagnostic Jobs remain readable but are never dispatched", async (t) => {
-  const stateDir = await mkdtemp(join(tmpdir(), "friday-legacy-diagnostic-"));
-  t.after(() => rm(stateDir, { recursive: true, force: true }));
-  const databasePath = join(stateDir, "friday.sqlite");
-  const identity = generateKeyPairSync("ed25519");
-  const hubIdentity = { publicKeyPem: identity.publicKey.export({ type: "spki", format: "pem" }).toString(), privateKeyPem: identity.privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
-  const registry = new SqliteJobRegistry(databasePath, hubIdentity);
-  registry.open();
-  const runnerId = randomUUID();
-  const jobId = randomUUID();
-  const database = new DatabaseSync(databasePath);
-  database.prepare("INSERT INTO jobs_v2 VALUES (?, ?, ?, ?, 'diagnostic', 'diagnose', ?, 'R0', ?, 'SUCCEEDED', NULL, -1, ?, ?)")
-    .run(jobId, randomUUID(), runnerId, "infra", "historic fixture", JSON.stringify({ timeoutSeconds: 900, maxOutputBytes: 1048576, cpuMillis: 1000, memoryMiB: 1024 }), new Date().toISOString(), new Date().toISOString());
-  database.close();
-  assert.equal(registry.get(jobId).tool, "diagnostic");
-  assert.equal(registry.list().some((job) => job.jobId === jobId), true);
-  assert.equal(registry.pull(runnerId), undefined);
-  registry.close();
 });
 
 test("a running Remote Agent can be redispatched from a durable checkpoint", async (t) => {
