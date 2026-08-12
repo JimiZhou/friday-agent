@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createFridayServer } from "../apps/fridayd/dist/server.js";
-import { acknowledgeChannelNotification, loadIlinkConfig, pollIlinkOnce, pullChannelNotification, sendIlinkText, sendTelegramText, startIlinkControlServer, telegramInbound, wechatIlinkInbound } from "../apps/channel-gateway/dist/index.js";
+import { acknowledgeChannelNotification, deliverIlinkNotification, loadIlinkConfig, pollIlinkOnce, pullChannelNotification, sendIlinkText, sendTelegramText, startIlinkControlServer, telegramInbound, wechatIlinkInbound } from "../apps/channel-gateway/dist/index.js";
 
 test("M2 Hub accepts only paired channel ingress and durable replay rejection", async (t) => {
   const stateDir=await mkdtemp(join(tmpdir(),"m2-hub-"));t.after(()=>rm(stateDir,{recursive:true,force:true}));
@@ -159,4 +159,23 @@ test("Gateway pulls and acknowledges durable channel notifications with its inge
   assert.equal(notification.text, "done");
   await acknowledgeChannelNotification(config, notification);
   assert.deepEqual(acknowledged, { leaseId: notification.leaseId });
+});
+
+test("iLink durable notification survives an upgrade without persisted reply context", async (t) => {
+  let sentBody;
+  const provider = createServer((request, response) => {
+    let raw = ""; request.on("data", (chunk) => { raw += chunk; }); request.on("end", () => {
+      sentBody = JSON.parse(raw); response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ ret: 0, errcode: 0 }));
+    });
+  });
+  await new Promise((resolve, reject) => { provider.once("error", reject); provider.listen(0, "127.0.0.1", resolve); });
+  t.after(() => new Promise((resolve, reject) => provider.close((error) => error === undefined ? resolve() : reject(error))));
+  const address = provider.address(); const port = typeof address === "object" && address !== null ? address.port : 0;
+  const stateDir = await mkdtemp(join(tmpdir(), "m2-ilink-upgrade-")); t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const config = loadIlinkConfig({ FRIDAY_WECHAT_ILINK_BASE_URL: `http://127.0.0.1:${port}/`, FRIDAY_WECHAT_ILINK_BOT_TOKEN: "private-direct-ilink-token", FRIDAY_GATEWAY_STATE_DIR: stateDir });
+  const notification = { notificationId: randomUUID(), channel: "wechat_ilink", senderId: "paired-owner", text: "task complete", leaseId: randomUUID() };
+  await deliverIlinkNotification(config, notification, AbortSignal.timeout(1_000));
+  assert.equal(sentBody.msg.to_user_id, "paired-owner");
+  assert.equal(sentBody.msg.client_id, `friday-${notification.notificationId}`);
+  assert.equal("context_token" in sentBody.msg, false);
 });

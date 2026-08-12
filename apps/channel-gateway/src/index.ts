@@ -343,14 +343,18 @@ export async function channelOutboxLoop(config: GatewayConfig, channel: Channel,
   }
 }
 
-async function deliverIlinkNotification(config: IlinkConfig, notification: HubChannelNotification, signal: AbortSignal): Promise<void> {
+export async function deliverIlinkNotification(config: IlinkConfig, notification: HubChannelNotification, signal: AbortSignal): Promise<void> {
   const credentials = await readIlinkCredentials(config);
   if (credentials === undefined) throw new Error("iLink is not paired");
   const contextToken = await readIlinkContext(config.contextPath, notification.senderId);
-  if (contextToken === undefined) throw new Error("iLink reply context is unavailable; send Friday a new direct message to refresh it");
   await sendIlinkText(config, credentials, {
     channel: "wechat_ilink", messageId: notification.notificationId, senderId: notification.senderId,
-    group: false, text: notification.text, contextToken,
+    group: false, text: notification.text,
+    // The official provider accepts notifications to the paired Owner without
+    // context. Prefer a fresh reply context when one has been observed, but do
+    // not strand durable results after an upgrade from a version that did not
+    // persist it.
+    ...(contextToken === undefined ? {} : { contextToken }),
   }, notification.text, signal, `friday-${notification.notificationId}`);
 }
 
