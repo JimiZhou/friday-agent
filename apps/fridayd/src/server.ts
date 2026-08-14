@@ -641,7 +641,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     (message) => console.error(JSON.stringify({ level: "warn", event: "self-improvement.promotion", message })),
   );
   await selfImprovementCoordinator.reconcile();
-  const jobChannelNotifier = new JobChannelNotifier(channelOutbox, jobRegistry);
+  const jobChannelNotifier = new JobChannelNotifier(channelOutbox, jobRegistry, config.channelApprovalEnabled === true);
   jobChannelNotifier.reconcile();
   for (const approval of nodeToolPolicy.listPending()) {
     jobChannelNotifier.requestClearance(approval.call, { status: "WAIT_APPROVAL", risk: approval.risk, background: approval.background });
@@ -880,6 +880,25 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       singleHeader(request.headers["x-friday-csrf"]),
       isStateChanging(method),
     );
+  }
+
+  function isChannelApprovalCommand(text: string): boolean {
+    const normalized = text.trim().toLocaleLowerCase("zh-CN");
+    return ["确认", "确认执行", "授权", "授权执行", "继续", "继续执行", "好的", "好", "可以", "ok", "yes"].includes(normalized);
+  }
+
+  async function approveFromPrivateChannel(channel: string, senderId: string, text: string): Promise<string | undefined> {
+    if (config.channelApprovalEnabled !== true || !isChannelApprovalCommand(text) || (channel !== "telegram" && channel !== "wechat_ilink")) return undefined;
+    const pending = channelOutbox.findPendingClearance(channel, senderId);
+    if (pending === undefined) return undefined;
+    if (pending.risk === "R3") return "这一步影响范围较大，需要到 Web 控制台确认。我先不执行。";
+    try {
+      const decision = await mutate(async () => nodeToolPolicy.approve(pending.callId, config.ownerId));
+      if (decision.status === "APPROVED") return "确认收到，我已经继续处理。完成后我把结果发给你。";
+      return "这次确认已经过期，我没有执行。需要的话，我可以重新规划。";
+    } catch {
+      return "这次确认没有生效，我先不执行。需要的话，我可以重新规划。";
+    }
   }
 
   async function channelGatewayRequest(pathname: string, init?: RequestInit): Promise<Record<string, unknown>> {
@@ -1319,6 +1338,11 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const acceptance = channelRegistry.accept(inbound.channel,inbound.token,inbound.senderId,inbound.messageId,inbound.group);
         if (acceptance === "rejected") { error(response,401,"INBOUND_REJECTED","Channel is unpaired, grouped, or unauthorized"); return; }
         if (acceptance === "new") await mutate(async()=>{ await store.append("channel.inbound",{channel:inbound.channel,messageId:inbound.messageId,senderId:inbound.senderId,textDigest:jsonDigest(inbound.text)}); });
+        const directApprovalReply = await approveFromPrivateChannel(inbound.channel, inbound.senderId, inbound.text);
+        if (directApprovalReply !== undefined) {
+          json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: directApprovalReply });
+          return;
+        }
         if (conversationOrchestrator === undefined || (inbound.channel !== "telegram" && inbound.channel !== "wechat_ilink")) {
           json(response,202,{accepted:true,duplicate:acceptance === "replay"}); return;
         }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
-import type { JobExecutionStateV2, NodeToolCallV1, NodeToolDecisionV1 } from "@friday/protocol";
+import type { JobExecutionStateV2, JobRiskLevelV2, NodeToolCallV1, NodeToolDecisionV1 } from "@friday/protocol";
 import type { SqliteJobRegistry } from "./job-registry.js";
 
 export type OutboundChannel = "telegram" | "wechat_ilink";
@@ -12,6 +12,11 @@ export interface ChannelNotification {
   readonly senderId: string;
   readonly text: string;
   readonly leaseId: string;
+}
+
+export interface PendingChannelClearance {
+  readonly callId: string;
+  readonly risk: JobRiskLevelV2;
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -186,6 +191,22 @@ export class ChannelOutbox {
     return false;
   }
 
+  /** Finds the newest pending node call bound to this exact private-channel recipient. */
+  findPendingClearance(channel: OutboundChannel, senderId: string): PendingChannelClearance | undefined {
+    requireChannel(channel);
+    requireSender(senderId);
+    const row = this.#requireDatabase().prepare(`
+      SELECT calls.call_id AS callId, calls.risk AS risk
+      FROM node_tool_calls_v1 calls
+      JOIN channel_job_bindings_v1 binding ON binding.job_id = calls.job_id
+      WHERE binding.channel = ? AND binding.sender_id = ? AND calls.status = 'WAIT_APPROVAL'
+      ORDER BY calls.updated_at DESC, calls.call_id DESC
+      LIMIT 1
+    `).get(channel, senderId) as unknown;
+    if (!isRecord(row) || typeof row.callId !== "string" || !isRisk(row.risk)) return undefined;
+    return { callId: row.callId, risk: row.risk };
+  }
+
   terminalJobsMissingNotification(): readonly string[] {
     return (this.#requireDatabase().prepare(`
       SELECT binding.job_id AS jobId
@@ -205,7 +226,11 @@ export class ChannelOutbox {
 
 /** Binds a conversation-created Job and turns its terminal Runner evidence into one notification. */
 export class JobChannelNotifier {
-  constructor(readonly outbox: ChannelOutbox, readonly jobs: SqliteJobRegistry) {}
+  constructor(
+    readonly outbox: ChannelOutbox,
+    readonly jobs: SqliteJobRegistry,
+    readonly channelApprovalEnabled = false,
+  ) {}
 
   bind(jobId: string, channel: OutboundChannel, senderId: string): void { this.outbox.bindJob(jobId, channel, senderId); }
 
@@ -217,15 +242,20 @@ export class JobChannelNotifier {
 
   requestClearance(call: NodeToolCallV1, decision: NodeToolDecisionV1): boolean {
     if (decision.status !== "WAIT_APPROVAL") return false;
-    const argumentsText = JSON.stringify(call.arguments);
-    return this.outbox.enqueueClearance(call.jobId, call.callId, truncateUtf8([
-      "Friday 需要你的授权后才能继续任务。",
-      `风险等级：${decision.risk}`,
-      `背景：${decision.background}`,
-      `能力：${call.name}`,
-      `精确参数：${argumentsText}`,
-      "该操作尚未执行。请登录 Web 控制台核对并授权。",
-    ].join("\n"), NOTIFICATION_TEXT_BYTES));
+    const reason = compactReason(call.reason);
+    const canApproveHere = this.channelApprovalEnabled && decision.risk !== "R3";
+    const text = decision.risk === "R3"
+      ? [
+          "这一步影响范围较大，我先停在这里。",
+          `「${reason}」`,
+          "请到 Web 控制台核对后授权。",
+        ].join("\n")
+      : [
+          "我准备继续这一步：",
+          `「${reason}」`,
+          canApproveHere ? "回复「确认」即可，我会继续。" : "请到 Web 控制台点“授权并执行”。",
+        ].join("\n");
+    return this.outbox.enqueueClearance(call.jobId, call.callId, truncateUtf8(text, NOTIFICATION_TEXT_BYTES));
   }
 
   reconcile(): number {
@@ -236,14 +266,20 @@ export class JobChannelNotifier {
 }
 
 function terminalText(status: JobExecutionStateV2, tool: string, operation: string, events: ReturnType<SqliteJobRegistry["listEvents"]>): string {
-  const heading = status === "SUCCEEDED" ? "任务已完成。" : status === "FAILED" ? "任务执行失败。" : "任务已取消。";
+  const heading = status === "SUCCEEDED" ? "好了，任务完成。" : status === "FAILED" ? "这次没跑完。" : "好，我先停下来了。";
   const details: string[] = [];
   for (const entry of events) {
     if (entry.event.type === "output" && typeof entry.event.chunk === "string" && entry.event.chunk.trim() !== "") details.push(entry.event.chunk.trim());
     if (entry.event.type === "error" && typeof entry.event.error?.message === "string") details.push(entry.event.error.message.trim());
   }
-  const text = [heading, `类型：${tool} / ${operation}`, ...(details.length === 0 ? [] : ["", "执行结果：", details.join("\n")])].join("\n");
+  const text = [heading, ...(details.length === 0 ? [] : ["", "结果：", details.join("\n")])].join("\n");
   return truncateUtf8(text, NOTIFICATION_TEXT_BYTES);
+}
+
+function compactReason(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 140) return normalized;
+  return truncateUtf8(normalized, 140).replace(/\n…（结果已截断，请在 Web 控制台查看完整记录）$/, "…");
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
@@ -261,6 +297,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
 function requireUuid(value: string, name: string): void { if (!UUID_PATTERN.test(value)) throw new Error(`${name} is invalid`); }
 function requireChannel(value: string): asserts value is OutboundChannel { if (!isChannel(value)) throw new Error("Channel is invalid"); }
 function isChannel(value: unknown): value is OutboundChannel { return value === "telegram" || value === "wechat_ilink"; }
+function isRisk(value: unknown): value is JobRiskLevelV2 { return value === "R0" || value === "R1" || value === "R2" || value === "R3"; }
 function requireSender(value: string): void { if (value.trim() === "" || Buffer.byteLength(value, "utf8") > 256 || value.includes("\0")) throw new Error("Sender is invalid"); }
 function requireText(value: string): void { if (value.trim() === "" || Buffer.byteLength(value, "utf8") > NOTIFICATION_TEXT_BYTES || value.includes("\0")) throw new Error("Notification text is invalid"); }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

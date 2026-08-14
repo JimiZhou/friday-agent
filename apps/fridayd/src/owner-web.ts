@@ -135,18 +135,18 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
 
       <section id="view-clearance" class="view" data-view-panel="clearance" hidden>
         <header class="view-header">
-          <div><p class="eyebrow">OWNER CLEARANCE</p><h1>授权</h1></div>
+          <div><p class="eyebrow">需要你确认</p><h1>授权</h1></div>
           <button id="refresh-clearance" class="button button-quiet" type="button">刷新</button>
         </header>
         <div class="section-intro clearance-intro">
           <p>只在需要写入、部署或影响服务时停下来。Friday 会先列明背景、风险和回滚方式，再由你一次授权。</p>
         </div>
         <section aria-labelledby="r1-title">
-          <div class="section-heading"><h2 id="r1-title">待执行任务</h2><span>R1</span></div>
+          <div class="section-heading"><h2 id="r1-title">待执行任务</h2><span>需要确认</span></div>
           <div id="approval-list" class="approval-list"></div>
         </section>
         <section aria-labelledby="improvement-title">
-          <div class="section-heading"><h2 id="improvement-title">Friday 自我迭代</h2><span>R2 / R3</span></div>
+          <div class="section-heading"><h2 id="improvement-title">Friday 自我迭代</h2><span>需要 Web 确认</span></div>
           <div id="improvement-list" class="approval-list"></div>
         </section>
       </section>
@@ -327,6 +327,10 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); color: var(--ink-soft); font-size: var(--text-xs); }
   .message-meta button { min-height: 32px; padding: 0 .5rem; border: 0; color: var(--ink-soft); background: transparent; }
   .message-job { width: min(38rem, 100%); display: grid; gap: var(--space-2); padding: var(--space-3) 0 var(--space-3) var(--space-4); border-left: 2px solid var(--accent); font-size: var(--text-sm); }
+  .message-approval { width: min(38rem, 100%); display: grid; gap: var(--space-2); margin-top: var(--space-3); padding: var(--space-4); background: var(--accent-soft); border: 1px solid color-mix(in oklch, var(--accent) 34%, var(--line)); }
+  .message-approval strong { font-size: var(--text-sm); }
+  .message-approval span { color: var(--ink-soft); font-size: var(--text-sm); line-height: 1.55; }
+  .message-approval .button { justify-self: start; }
   .message-error { color: var(--danger); }
 
   .composer { align-self: end; background: var(--surface); border: 1px solid var(--line-strong); box-shadow: 0 10px 32px color-mix(in oklch, var(--ink) 8%, transparent); }
@@ -444,6 +448,7 @@ export const OWNER_WEB_SCRIPT = String.raw`const byId = (id) => document.getElem
 const all = (selector) => Array.from(document.querySelectorAll(selector));
 const appState = {
   jobs: [], runners: [], improvements: [], nodeToolApprovals: [], conversationId: "main", activeView: "chat",
+  conversationTurns: [],
   pairingId: null, pairingTimer: null, recorder: null, voiceChunks: [],
   pendingMedia: [], uploadInFlight: false, sending: false,
   talkActive: false, recognition: null, talkTranscript: "", talkTimer: null,
@@ -457,6 +462,12 @@ const stateLabels = {
   CLEARED: "已授权", CANARY: "小流量验证", DEPLOYED: "已部署", ROLLED_BACK: "已回滚"
 };
 const toolLabels = { agent: "Friday Agent", codex: "Codex", pi: "Pi", claude: "Claude Code" };
+const nodeToolLabels = {
+  "system.snapshot": "读取系统状态", "process.list": "查看进程", "service.status": "查看服务状态",
+  "journal.read": "读取运行日志", "network.sockets": "查看网络连接", "file.read": "读取文件",
+  "file.search": "搜索文件", "file.write": "写入文件", "file.delete": "删除文件",
+  "process.signal": "处理进程", "service.restart": "重启服务", "command.exec": "执行一次系统检查",
+};
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -548,6 +559,10 @@ function statusChip(status) {
   return element("span", className, label);
 }
 
+function approvalChip(risk) {
+  return element("span", "risk-chip", risk === "R3" ? "仅限 Web 确认" : "需要你确认");
+}
+
 function emptyRow(text) {
   return element("p", "empty-row", text);
 }
@@ -604,6 +619,7 @@ async function loadConversation() {
   } catch (error) {
     throw error;
   }
+  appState.conversationTurns = turns;
   renderConversation(turns);
 }
 
@@ -636,10 +652,34 @@ function renderConversation(turns) {
       if (turn.jobProposal || turn.selfImprovementProposal) {
         const proposal = turn.jobProposal || turn.selfImprovementProposal;
         const job = element("div", "message-job");
-        job.append(element("strong", "", turn.selfImprovementProposal ? "已提出 Friday 自我迭代任务" : "已提出设备任务"));
-        job.append(element("span", "", (toolLabels[proposal.tool] || proposal.tool) + " · " + proposal.workspaceId + (turn.jobId ? " · " + shortId(turn.jobId) : "")));
+        job.append(element("strong", "", turn.selfImprovementProposal ? "我已经准备好 Friday 的改进任务" : "我已经准备好这项设备任务"));
+        job.append(element("span", "", "会在受控节点上执行，过程中不会把权限交给模型。"));
         job.append(statusChip(turn.schedulingError ? "FAILED" : "WAIT_APPROVAL"));
         friday.append(job);
+
+        const scheduledJob = turn.jobId ? appState.jobs.find((item) => item.jobId === turn.jobId) : undefined;
+        if (scheduledJob?.status === "WAIT_APPROVAL" && scheduledJob.risk === "R1") {
+          const approval = element("div", "message-approval");
+          approval.append(element("strong", "", "这项任务等你确认"), element("span", "", "确认后 Friday 才会开始。"));
+          const approve = element("button", "button button-primary", "确认并开始");
+          approve.type = "button";
+          approve.addEventListener("click", () => runAction(approve, () => post("/v2/jobs/" + scheduledJob.jobId + "/approve", {}), "好，任务开始了"));
+          approval.append(approve);
+          friday.append(approval);
+        }
+        const pendingNodeTool = turn.jobId ? (appState.nodeToolApprovals || []).find((item) => item.call.jobId === turn.jobId) : undefined;
+        if (pendingNodeTool) {
+          const approval = element("div", "message-approval");
+          approval.append(
+            element("strong", "", "我准备" + (nodeToolLabels[pendingNodeTool.call.name] || "继续处理")),
+            element("span", "", pendingNodeTool.call.reason || "确认后我就继续。"),
+          );
+          const approve = element("button", "button button-primary", "确认并继续");
+          approve.type = "button";
+          approve.addEventListener("click", () => runAction(approve, () => post("/v2/node-tool-approvals/" + pendingNodeTool.call.callId + "/approve", {}), "好，我继续处理"));
+          approval.append(approve);
+          friday.append(approval);
+        }
       }
       const meta = element("div", "message-meta");
       meta.append(element("span", "", formatTime(turn.updatedAt)));
@@ -1126,9 +1166,9 @@ function jobRow(job, approvalOnly) {
   const row = element("article", approvalOnly ? "approval-row" : "ledger-row");
   const main = element("div", approvalOnly ? "approval-copy" : "ledger-main");
   const title = element("div", "ledger-title");
-  title.append(element("h2", "", (toolLabels[job.tool] || job.tool) + " · " + job.operation), statusChip(job.status), element("span", "risk-chip", job.risk));
+  title.append(element("h2", "", (toolLabels[job.tool] || job.tool) + " · " + job.operation), statusChip(job.status), approvalChip(job.risk));
   main.append(title, element("p", "ledger-meta", job.workspaceId + " · 任务 " + shortId(job.jobId) + " · 节点 " + shortId(job.runnerId) + " · " + formatTime(job.updatedAt)));
-  if (approvalOnly) main.append(element("p", "", "该任务会在受控节点执行 " + (toolLabels[job.tool] || job.tool) + "。授权后由 Hub 签发执行清单并派发。"));
+  if (approvalOnly) main.append(element("p", "", "我会在受控节点执行这项任务。确认后才会开始。"));
   const actions = element("div", approvalOnly ? "approval-actions" : "ledger-actions");
   if (job.status === "WAIT_APPROVAL" && job.risk === "R1") {
     const approve = element("button", "button button-primary", "授权并执行");
@@ -1170,6 +1210,7 @@ async function loadClearance() {
     appState.nodeToolApprovals = nodeTools.approvals || [];
     renderApprovals();
     renderImprovements();
+    renderConversation(appState.conversationTurns);
     updateCounts();
   } catch (error) { byId("improvement-list").replaceChildren(emptyRow("自我迭代记录读取失败，请稍后刷新。")); }
 }
@@ -1182,13 +1223,13 @@ function renderApprovals() {
     const row = element("article", "approval-row");
     const copy = element("div", "approval-copy");
     const title = element("div", "ledger-title");
-    title.append(element("h3", "", item.call.name), statusChip("WAIT_APPROVAL"), element("span", "risk-chip", item.risk));
+    title.append(element("h3", "", nodeToolLabels[item.call.name] || item.call.name), statusChip("WAIT_APPROVAL"), approvalChip(item.risk));
     copy.append(title, element("p", "ledger-meta", "任务 " + shortId(item.call.jobId) + " · 调用 " + shortId(item.call.callId)));
     const context = element("div", "approval-context");
-    context.append(contextItem("背景", item.call.reason), contextItem("能力分级", item.background), contextItem("精确参数", JSON.stringify(item.call.arguments)));
+    context.append(contextItem("要做什么", item.call.reason), contextItem("执行位置", "受控节点"));
     copy.append(context);
     const actions = element("div", "approval-actions");
-    const approve = element("button", "button button-primary", "确认风险并授权");
+    const approve = element("button", "button button-primary", "确认并继续");
     approve.type = "button";
     approve.addEventListener("click", () => runAction(approve, () => post("/v2/node-tool-approvals/" + item.call.callId + "/approve", {}), "节点工具调用已授权"));
     actions.append(approve);
@@ -1221,15 +1262,15 @@ function renderImprovements() {
     copy.append(context);
     const actions = element("div", "approval-actions");
     if (item.state === "TESTED") {
-      const request = element("button", "button button-secondary", "生成 Clearance");
+      const request = element("button", "button button-secondary", "生成确认请求");
       request.type = "button";
-      request.addEventListener("click", () => runAction(request, () => post("/v4/self-improvements/" + item.id + "/clearance-request", {}), "Clearance 已生成，请核对风险后授权"));
+      request.addEventListener("click", () => runAction(request, () => post("/v4/self-improvements/" + item.id + "/clearance-request", {}), "确认请求已生成，请核对后授权"));
       actions.append(request);
     }
     if (item.state === "WAIT_APPROVAL" && item.clearance) {
-      const grant = element("button", "button button-primary", "确认风险并授权");
+      const grant = element("button", "button button-primary", "确认并继续");
       grant.type = "button";
-      grant.addEventListener("click", () => runAction(grant, () => post("/v4/self-improvements/" + item.id + "/clearance-grant", { clearanceId: item.clearance.clearanceId }), "Clearance 已授权"));
+      grant.addEventListener("click", () => runAction(grant, () => post("/v4/self-improvements/" + item.id + "/clearance-grant", { clearanceId: item.clearance.clearanceId }), "已确认"));
       actions.append(grant);
     }
     if (item.state === "CLEARED" && item.clearance) {

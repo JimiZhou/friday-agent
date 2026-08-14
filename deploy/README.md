@@ -125,6 +125,9 @@ curl -fsS http://127.0.0.1:4310/health
 
 iLink 只接受私聊，拒绝群聊、未配对 sender 和 replay。Gateway 只持有 channel ingest/control 凭据，不能读取 Owner 管理 API 或批准任务。
 
+如需在已配对的私聊中直接确认普通受控操作，可在 Hub 的 `hub.env` 中加入
+`FRIDAY_CHANNEL_APPROVAL_ENABLE=1`。Friday 会用一句话说明准备做什么，回复“确认”即可继续；删除、凭据和生产切换等影响范围较大的操作仍只在 Web 控制台确认。该开关只适合保持私密且已绑定 Owner 的频道。
+
 ### 5.2 Telegram Bot
 
 Bot Token 和数字 Owner ID 只能通过环境变量交给配置脚本，不接受命令行参数：

@@ -31,6 +31,8 @@ export interface FridayConfig {
   selfImprovementWorkspaceId?: string;
   /** Optional loopback-only control plane for the isolated Channel Gateway. */
   channelGateway?: ChannelGatewayControlConfig;
+  /** Allows an explicitly paired private channel to confirm R1/R2 node calls. */
+  channelApprovalEnabled?: boolean;
   maxBodyBytes: number;
 }
 
@@ -94,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): FridayConfig {
   const mcpBrokerSocketPath = env.FRIDAY_MCP_BROKER_SOCKET;
   const conversationEnabled = readOptionalBoolean(env.FRIDAY_CONVERSATION_ENABLE, "FRIDAY_CONVERSATION_ENABLE");
   const webSearchEnabled = readOptionalBoolean(env.FRIDAY_WEB_SEARCH_ENABLE, "FRIDAY_WEB_SEARCH_ENABLE");
+  const channelApprovalEnabled = readOptionalBoolean(env.FRIDAY_CHANNEL_APPROVAL_ENABLE, "FRIDAY_CHANNEL_APPROVAL_ENABLE");
   const conversationAgent = conversationEnabled === true ? loadConversationAgentConfig(env) : undefined;
   const runnerModelProxy = loadRunnerModelProxyConfig(env);
   const channelGateway = loadChannelGatewayControlConfig(env);
@@ -116,6 +119,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): FridayConfig {
     ...(runnerModelProxy === undefined ? {} : { runnerModelProxy }),
     selfImprovementWorkspaceId: env.FRIDAY_SELF_WORKSPACE_ID ?? "friday-agent",
     ...(channelGateway === undefined ? {} : { channelGateway }),
+    ...(channelApprovalEnabled === undefined ? {} : { channelApprovalEnabled }),
     maxBodyBytes: 1_048_576,
   };
   validateConfig(config);
@@ -165,6 +169,9 @@ export function validateConfig(config: FridayConfig): void {
   }
   if (config.webSearchEnabled !== undefined && typeof config.webSearchEnabled !== "boolean") {
     throw new Error("FRIDAY_WEB_SEARCH_ENABLE must be boolean");
+  }
+  if (config.channelApprovalEnabled !== undefined && typeof config.channelApprovalEnabled !== "boolean") {
+    throw new Error("FRIDAY_CHANNEL_APPROVAL_ENABLE must be boolean");
   }
   if (config.procedureOwnerPublicKeyPem !== undefined) {
     try {
