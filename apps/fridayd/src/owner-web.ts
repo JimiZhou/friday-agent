@@ -44,9 +44,14 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
       <div class="brand"><span class="reactor" aria-hidden="true"></span><span>FRIDAY AGENT</span></div>
       <nav class="primary-nav" aria-label="主导航">
         <button class="nav-item is-active" type="button" data-view="chat" aria-current="page"><span aria-hidden="true">◉</span><b>对话</b></button>
-        <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
-        <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b><em id="task-count" hidden>0</em></button>
-        <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b><em id="clearance-count" hidden>0</em></button>
+        <details class="advanced-menu">
+          <summary class="nav-item advanced-summary"><span aria-hidden="true">≡</span><b>高级菜单</b></summary>
+          <div class="advanced-links">
+            <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
+            <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b><em id="task-count" hidden>0</em></button>
+            <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b><em id="clearance-count" hidden>0</em></button>
+          </div>
+        </details>
       </nav>
       <div class="sidebar-footer">
         <div class="connection-state"><span id="hub-dot" class="status-dot"></span><span id="hub-state">Hub 在线</span></div>
@@ -63,15 +68,16 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
       <section id="view-chat" class="view view-chat" data-view-panel="chat">
         <header class="view-header chat-header">
           <div>
-            <p class="eyebrow">MAIN CONVERSATION</p>
+            <p class="eyebrow">PERSONAL CONVERSATION</p>
             <h1>Friday</h1>
+            <p class="chat-subtitle">说重点就好。我会先给结论，需要你确认时再停下来。</p>
           </div>
           <div class="channel-state"><span id="wechat-dot" class="status-dot status-dot-muted"></span><span id="wechat-header-state">微信状态检查中</span></div>
         </header>
         <div id="conversation" class="conversation" role="log" aria-live="polite" aria-label="与 Friday 的对话">
           <div class="conversation-empty">
-            <p>可以直接说要做什么。</p>
-            <span>例如：检查纳管节点状态、搜索最新 Pi 版本，或让 Codex 在受控工作区修改项目。</span>
+            <p>说吧，我在。</p>
+            <span>支持文字、语音、图片和短视频。复杂任务我会先用一句话说清楚下一步。</span>
           </div>
         </div>
         <form id="composer" class="composer">
@@ -81,7 +87,7 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
           <input id="media-picker" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" multiple tabindex="-1" aria-hidden="true">
           <div class="composer-actions">
             <button id="attach" class="icon-button" type="button" aria-label="添加图片或短视频" title="添加图片或短视频">＋</button>
-            <button id="voice" class="talk-button" type="button" aria-label="开始实时对讲" title="实时对讲使用浏览器语音服务">对讲</button>
+            <button id="voice" class="talk-button" type="button" aria-label="开启语音模式" aria-pressed="false" title="开启语音模式：直接说话，Friday 会用语音回答">语音模式</button>
             <span id="composer-state" role="status"></span>
             <button id="send" class="button button-primary send-button" type="submit">发送 <span aria-hidden="true">↗</span></button>
           </div>
@@ -154,9 +160,14 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
 
     <nav class="mobile-nav" aria-label="移动端主导航">
       <button class="nav-item is-active" type="button" data-view="chat"><span aria-hidden="true">◉</span><b>对话</b></button>
-      <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
-      <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b></button>
-      <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b></button>
+      <details class="advanced-menu mobile-advanced">
+        <summary class="nav-item advanced-summary"><span aria-hidden="true">≡</span><b>高级菜单</b></summary>
+        <div class="advanced-sheet">
+          <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
+          <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b></button>
+          <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b></button>
+        </div>
+      </details>
     </nav>
   </div>
 
@@ -284,6 +295,10 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .icon-button:hover { color: var(--surface); background: var(--ink); border-color: var(--ink); }
   .talk-button { min-width: 4.25rem; padding: .6rem .8rem; color: var(--ink); background: transparent; border: 1px solid var(--line-strong); border-radius: 999px; font-size: var(--text-sm); font-weight: 700; }
   .talk-button:hover, .talk-button.is-recording { color: var(--surface); background: var(--accent-dark); border-color: var(--accent-dark); }
+  .advanced-menu > summary { list-style: none; cursor: pointer; }
+  .advanced-menu > summary::-webkit-details-marker { display: none; }
+  .advanced-links { display: grid; gap: .25rem; padding-top: .25rem; }
+  .advanced-links .nav-item { width: 100%; }
 
   .app-shell { min-height: 100vh; min-height: 100dvh; background: var(--paper); }
   .sidebar { display: none; }
@@ -302,6 +317,8 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .view-header > div:first-child { display: grid; gap: var(--space-2); }
   .view-header h1 { font-size: clamp(2.25rem, 5vw, 4rem); }
   .chat-header { padding-bottom: var(--space-4); }
+  .chat-header > div:first-child { gap: .4rem; }
+  .chat-subtitle { max-width: 38ch; color: var(--ink-soft); font-size: var(--text-sm); line-height: 1.45; }
   .header-actions { display: flex; align-items: center; gap: var(--space-2); }
   .header-actions select { width: auto; min-width: 7rem; background: transparent; }
   .section-intro { display: grid; gap: var(--space-4); padding: var(--space-6) 0 var(--space-8); color: var(--ink-soft); }
@@ -315,8 +332,43 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .message { display: grid; gap: var(--space-2); margin-bottom: var(--space-8); }
   .message-user { justify-items: end; }
   .message-label { color: var(--ink-soft); font-size: var(--text-xs); font-weight: 700; letter-spacing: .08em; }
-  .message-body { max-width: min(42rem, 88%); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+  .message-body { max-width: min(42rem, 88%); overflow-wrap: anywhere; line-height: 1.65; }
   .message-user .message-body { padding: .75rem 1rem; background: var(--paper-deep); border-radius: 14px 14px 2px 14px; }
+  .message-user .message-body { white-space: pre-wrap; }
+  .markdown-body { display: grid; gap: .8rem; }
+  .markdown-body > :first-child { margin-top: 0; }
+  .markdown-body > :last-child { margin-bottom: 0; }
+  .markdown-body h2, .markdown-body h3, .markdown-body h4 { margin: .4rem 0 -.2rem; font-family: var(--font-body); letter-spacing: -.02em; }
+  .markdown-body h2 { font-size: 1.18rem; }
+  .markdown-body h3 { font-size: 1.05rem; }
+  .markdown-body h4 { font-size: 1rem; }
+  .markdown-body p { margin: 0; }
+  .markdown-body ul, .markdown-body ol { display: grid; gap: .35rem; margin: 0; padding-left: 1.35rem; }
+  .markdown-body li > p { display: inline; }
+  .markdown-body blockquote { margin: 0; padding: .15rem 0 .15rem 1rem; color: var(--ink-soft); border-left: 2px solid var(--accent); }
+  .markdown-body hr { width: 100%; border: 0; border-top: 1px solid var(--line); }
+  .markdown-body strong { color: var(--ink); font-weight: 750; }
+  .markdown-body em { color: var(--ink-soft); }
+  .markdown-body code { padding: .12rem .32rem; color: var(--accent-dark); background: var(--accent-soft); font-size: .9em; font-variant-ligatures: none; }
+  .markdown-body pre { overflow: auto; margin: 0; padding: .85rem 1rem; color: var(--paper); background: var(--ink); border: 1px solid var(--line); }
+  .markdown-body pre code { padding: 0; color: inherit; background: transparent; font-size: .88em; white-space: pre; }
+  .markdown-body a { color: var(--accent-dark); text-decoration-thickness: .08em; text-underline-offset: .16em; }
+  .markdown-table { overflow-x: auto; border: 1px solid var(--line); }
+  .markdown-table table { width: 100%; min-width: 28rem; border-collapse: collapse; font-size: var(--text-sm); }
+  .markdown-table th, .markdown-table td { padding: .55rem .7rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .markdown-table th { color: var(--ink); background: var(--paper-deep); font-weight: 750; }
+  .markdown-table tr:last-child td { border-bottom: 0; }
+  .markdown-media { display: grid; gap: .35rem; margin: 0; }
+  .markdown-media img, .markdown-media video { max-width: 100%; max-height: 24rem; border: 1px solid var(--line); background: var(--ink); object-fit: contain; }
+  .markdown-media audio { width: min(100%, 28rem); }
+  .markdown-media figcaption { color: var(--ink-soft); font-size: var(--text-xs); }
+  .markdown-chart { display: grid; gap: .8rem; margin: 0; padding: 1rem; background: var(--paper-deep); border: 1px solid var(--line); }
+  .markdown-chart figcaption { font-weight: 750; }
+  .chart-bars { display: grid; grid-template-columns: repeat(var(--chart-count), minmax(2.5rem, 1fr)); gap: .55rem; align-items: end; min-height: 10rem; padding: .75rem .25rem 0; border-bottom: 1px solid var(--line-strong); }
+  .chart-bar { display: grid; grid-template-rows: 1fr auto auto; gap: .25rem; align-items: end; min-width: 0; height: 100%; text-align: center; }
+  .chart-bar::before { content: ""; width: min(2.25rem, 72%); height: var(--bar-height); justify-self: center; background: var(--accent); border-radius: 2px 2px 0 0; }
+  .chart-bar-value { color: var(--ink); font-size: .7rem; font-variant-numeric: tabular-nums; }
+  .chart-bar-label { overflow: hidden; color: var(--ink-soft); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
   .message-media { width: min(32rem, 88%); display: grid; grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr)); gap: var(--space-2); }
   .message-user .message-media { justify-self: end; }
   .message-media figure { min-width: 0; margin: 0; display: grid; gap: var(--space-1); }
@@ -391,12 +443,17 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .approval-context strong { color: var(--ink); }
   .approval-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
 
-  .mobile-nav { position: fixed; z-index: 30; inset: auto 0 0; display: grid; grid-template-columns: repeat(4, 1fr); padding: .35rem max(.5rem, env(safe-area-inset-right)) max(.35rem, env(safe-area-inset-bottom)) max(.5rem, env(safe-area-inset-left)); background: var(--ink); }
+  .mobile-nav { position: fixed; z-index: 30; inset: auto 0 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: .35rem max(.5rem, env(safe-area-inset-right)) max(.35rem, env(safe-area-inset-bottom)) max(.5rem, env(safe-area-inset-left)); background: var(--ink); }
   .nav-item { position: relative; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: .35rem; color: oklch(74% .018 80); background: transparent; border: 0; font-size: var(--text-xs); }
   .nav-item b { font-weight: 600; }
   .nav-item.is-active { color: var(--surface); }
   .nav-item.is-active::after { content: ""; position: absolute; left: 24%; right: 24%; bottom: 2px; height: 2px; background: var(--accent); }
   .nav-item em { min-width: 18px; height: 18px; display: grid; place-items: center; border-radius: 9px; color: var(--surface); background: var(--accent); font-size: .65rem; font-style: normal; }
+  .mobile-advanced { position: relative; }
+  .mobile-advanced[open] > .advanced-summary { color: var(--surface); background: oklch(27% .028 244); }
+  .advanced-sheet { position: absolute; right: .5rem; bottom: calc(100% + .5rem); min-width: 11rem; padding: .35rem; background: var(--ink); border: 1px solid oklch(37% .028 244); box-shadow: 0 12px 28px color-mix(in oklch, var(--ink) 24%, transparent); }
+  .advanced-sheet .nav-item { justify-content: flex-start; padding: 0 .65rem; }
+  .advanced-sheet .nav-item.is-active { color: var(--surface); background: oklch(27% .028 244); }
 
   .toast { position: fixed; z-index: 80; left: 50%; bottom: calc(5.5rem + env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(90vw, 32rem); padding: .85rem 1rem; color: var(--surface); background: var(--ink); border-left: 3px solid var(--accent); font-size: var(--text-sm); box-shadow: 0 12px 32px color-mix(in oklch, var(--ink) 20%, transparent); animation: toast-in 240ms var(--ease-out) both; }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 10px); } }
@@ -425,6 +482,9 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
     .primary-nav .nav-item span { width: 1.25rem; color: oklch(66% .025 80); text-align: center; }
     .primary-nav .nav-item.is-active { background: oklch(27% .028 244); }
     .primary-nav .nav-item.is-active::after { inset: 11px auto 11px 0; width: 2px; height: auto; }
+    .primary-nav .advanced-menu[open] > .advanced-summary { color: var(--surface); background: oklch(27% .028 244); }
+    .primary-nav .advanced-links .nav-item { min-height: 44px; padding-left: 1.5rem; font-size: var(--text-xs); }
+    .primary-nav .advanced-links .nav-item.is-active { background: oklch(30% .028 244); }
     .sidebar-footer { margin-top: auto; display: grid; gap: var(--space-3); padding: 0 .75rem; }
     .sidebar-footer .connection-state, .sidebar-footer .text-button { color: oklch(76% .018 80); }
     .mobile-header, .mobile-nav { display: none; }
@@ -476,6 +536,231 @@ function element(tag, className, text) {
   return node;
 }
 
+const markdownFence = String.fromCharCode(96).repeat(3);
+
+function safeMarkdownUrl(value, media) {
+  const raw = String(value || "").trim().replace(/^<|>$/g, "");
+  try {
+    const url = new URL(raw, location.origin);
+    if (url.username || url.password) return null;
+    if (media) return url.origin === location.origin || url.protocol === "https:" ? url.href : null;
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : null;
+  } catch (_) { return null; }
+}
+
+function appendMarkdownText(fragment, value) {
+  String(value).split("\n").forEach((part, index) => {
+    if (index > 0) fragment.append(document.createElement("br"));
+    if (part) fragment.append(document.createTextNode(part));
+  });
+}
+
+function markdownDestination(raw) {
+  const parts = String(raw).trim().match(/^(<[^>]+>|[^\s]+)(?:\s+["']([^"']*)["'])?$/);
+  return parts ? { url: parts[1], title: parts[2] || "" } : { url: String(raw).trim(), title: "" };
+}
+
+function markdownMedia(url, label) {
+  const lower = url.toLowerCase().split("?")[0].split("#")[0];
+  const figure = element("figure", "markdown-media");
+  let media;
+  if (/\.(mp4|webm|mov|m4v)$/.test(lower)) {
+    media = document.createElement("video");
+    media.controls = true;
+    media.preload = "metadata";
+    media.setAttribute("playsinline", "");
+  } else if (/\.(mp3|m4a|wav|ogg|oga|aac|flac)$/.test(lower)) {
+    media = document.createElement("audio");
+    media.controls = true;
+    media.preload = "metadata";
+  } else {
+    media = document.createElement("img");
+    media.loading = "lazy";
+    media.alt = label || "Friday 分享的图片";
+  }
+  media.referrerPolicy = "no-referrer";
+  media.src = url;
+  media.addEventListener("error", () => media.replaceWith(element("div", "media-unavailable", "媒体暂时无法读取")), { once: true });
+  figure.append(media);
+  if (label) figure.append(element("figcaption", "", label));
+  return figure;
+}
+
+function inlineMarkdown(source) {
+  const fragment = document.createDocumentFragment();
+  const text = String(source || "");
+  const codeMark = String.fromCharCode(96);
+  let index = 0;
+  let plainStart = 0;
+  const flushPlain = (end) => {
+    if (end > plainStart) appendMarkdownText(fragment, text.slice(plainStart, end));
+  };
+  while (index < text.length) {
+    const isImage = text.startsWith("![", index);
+    const isLink = text[index] === "[";
+    if (text[index] === codeMark) {
+      const end = text.indexOf(codeMark, index + 1);
+      if (end > index + 1) {
+        flushPlain(index);
+        fragment.append(element("code", "", text.slice(index + 1, end)));
+        index = end + 1;
+        plainStart = index;
+        continue;
+      }
+    }
+    if (isImage || isLink) {
+      const labelStart = index + (isImage ? 2 : 1);
+      const labelEnd = text.indexOf("](", labelStart);
+      const destinationEnd = labelEnd < 0 ? -1 : text.indexOf(")", labelEnd + 2);
+      if (labelEnd > labelStart && destinationEnd > labelEnd + 2) {
+        const destination = markdownDestination(text.slice(labelEnd + 2, destinationEnd));
+        const url = safeMarkdownUrl(destination.url, isImage);
+        if (url) {
+          flushPlain(index);
+          const label = text.slice(labelStart, labelEnd);
+          if (isImage) fragment.append(markdownMedia(url, label));
+          else {
+            const link = element("a", "", label || url);
+            link.href = url;
+            if (destination.title) link.title = destination.title;
+            if (/^https?:/i.test(url)) { link.target = "_blank"; link.rel = "noreferrer noopener"; }
+            fragment.append(link);
+          }
+          index = destinationEnd + 1;
+          plainStart = index;
+          continue;
+        }
+      }
+    }
+    const marker = text.startsWith("**", index) || text.startsWith("__", index) ? text.slice(index, index + 2)
+      : text.startsWith("~~", index) ? "~~"
+      : (text[index] === "*" || text[index] === "_") && !/\s/.test(text[index + 1] || "") ? text[index] : "";
+    if (marker) {
+      const end = text.indexOf(marker, index + marker.length);
+      if (end > index + marker.length) {
+        flushPlain(index);
+        const tag = marker === "~~" ? "del" : marker.length === 2 ? "strong" : "em";
+        fragment.append(element(tag, "", text.slice(index + marker.length, end)));
+        index = end + marker.length;
+        plainStart = index;
+        continue;
+      }
+    }
+    index += 1;
+  }
+  flushPlain(text.length);
+  return fragment;
+}
+
+function tableCells(line) {
+  const trimmed = String(line).trim().replace(/^\|/, "").replace(/\|$/, "");
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function isTableSeparator(line) {
+  const cells = tableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownBlockStart(line) {
+  return /^ {0,3}(#{1,3})\s+/.test(line) || /^ {0,3}([-*+]\s+|\d+[.)]\s+|>\s?)/.test(line) || /^ {0,3}[-*_](?:\s*[-*_]){2,}\s*$/.test(line);
+}
+
+function chartBlock(value) {
+  let data;
+  try { data = JSON.parse(value); } catch (_) { return null; }
+  if (!data || typeof data !== "object" || !Array.isArray(data.labels) || !Array.isArray(data.values) || data.labels.length === 0 || data.labels.length !== data.values.length || data.labels.length > 12) return null;
+  const labels = data.labels.map((label) => String(label).trim().slice(0, 32));
+  const values = data.values.map((number) => typeof number === "number" && Number.isFinite(number) && number >= 0 ? number : NaN);
+  if (values.some((number) => Number.isNaN(number))) return null;
+  const maximum = Math.max(...values, 1);
+  const figure = element("figure", "markdown-chart");
+  if (typeof data.title === "string" && data.title.trim()) figure.append(element("figcaption", "", data.title.trim().slice(0, 120)));
+  const bars = element("div", "chart-bars");
+  bars.style.setProperty("--chart-count", String(labels.length));
+  labels.forEach((label, index) => {
+    const bar = element("div", "chart-bar");
+    bar.style.setProperty("--bar-height", String(Math.max(5, values[index] / maximum * 100)) + "%");
+    bar.append(element("span", "chart-bar-value", String(values[index])), element("span", "chart-bar-label", label));
+    bars.append(bar);
+  });
+  figure.append(bars);
+  return figure;
+}
+
+function renderMarkdown(source) {
+  const fragment = document.createDocumentFragment();
+  const lines = String(source || "").replace(/\r\n?/g, "\n").split("\n");
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index];
+    if (!line.trim()) { index += 1; continue; }
+    const fence = line.match(new RegExp("^ {0,3}" + markdownFence + "([A-Za-z0-9_-]*)\\s*$"));
+    if (fence) {
+      const language = (fence[1] || "").toLowerCase();
+      const content = [];
+      index += 1;
+      while (index < lines.length && lines[index].trim() !== markdownFence) { content.push(lines[index]); index += 1; }
+      if (index < lines.length) index += 1;
+      const chart = language === "chart" ? chartBlock(content.join("\n")) : null;
+      if (chart) fragment.append(chart);
+      else {
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        if (language) code.className = "language-" + language;
+        code.textContent = content.join("\n");
+        pre.append(code); fragment.append(pre);
+      }
+      continue;
+    }
+    const heading = line.match(/^ {0,3}(#{1,3})\s+(.+?)\s*#*$/);
+    if (heading) {
+      const node = element("h" + Math.min(4, heading[1].length), "");
+      node.append(inlineMarkdown(heading[2])); fragment.append(node); index += 1; continue;
+    }
+    if (index + 1 < lines.length && line.includes("|") && isTableSeparator(lines[index + 1])) {
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      const headRow = document.createElement("tr");
+      tableCells(line).forEach((cell) => { const th = document.createElement("th"); th.scope = "col"; th.append(inlineMarkdown(cell)); headRow.append(th); });
+      head.append(headRow); table.append(head);
+      const body = document.createElement("tbody"); index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        const row = document.createElement("tr"); tableCells(lines[index]).forEach((cell) => { const td = document.createElement("td"); td.append(inlineMarkdown(cell)); row.append(td); });
+        body.append(row); index += 1;
+      }
+      table.append(body); const wrapper = element("div", "markdown-table"); wrapper.append(table); fragment.append(wrapper); continue;
+    }
+    const list = line.match(/^ {0,3}([-*+]\s+|\d+[.)]\s+)(.+)$/);
+    if (list) {
+      const ordered = /^\d/.test(list[1]);
+      const node = document.createElement(ordered ? "ol" : "ul");
+      while (index < lines.length) {
+        const item = lines[index].match(/^ {0,3}([-*+]\s+|\d+[.)]\s+)(.+)$/);
+        if (!item || /^\d/.test(item[1]) !== ordered) break;
+        const li = document.createElement("li"); li.append(inlineMarkdown(item[2])); node.append(li); index += 1;
+      }
+      fragment.append(node); continue;
+    }
+    if (/^ {0,3}>/.test(line)) {
+      const quote = document.createElement("blockquote");
+      while (index < lines.length && /^ {0,3}>/.test(lines[index])) { quote.append(inlineMarkdown(lines[index].replace(/^ {0,3}>\s?/, ""))); index += 1; if (index < lines.length) quote.append(document.createElement("br")); }
+      fragment.append(quote); continue;
+    }
+    if (/^ {0,3}[-*_](?:\s*[-*_]){2,}\s*$/.test(line)) { fragment.append(document.createElement("hr")); index += 1; continue; }
+    const paragraph = [line]; index += 1;
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index]) && !(index + 1 < lines.length && lines[index].includes("|") && isTableSeparator(lines[index + 1]))) { paragraph.push(lines[index]); index += 1; }
+    const node = document.createElement("p"); node.append(inlineMarkdown(paragraph.join("\n"))); fragment.append(node);
+  }
+  return fragment;
+}
+
+function plainTextFromMarkdown(source) {
+  const host = document.createElement("div");
+  host.append(renderMarkdown(source));
+  return host.textContent || String(source || "").replace(/[*_#>]/g, "").replace(new RegExp(String.fromCharCode(96), "g"), "").trim();
+}
+
 function csrfToken() {
   const match = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("friday_csrf="));
   return match ? decodeURIComponent(match.slice("friday_csrf=".length)) : "";
@@ -524,6 +809,7 @@ function showLogin() {
 function showApp() {
   byId("login-shell").hidden = true;
   byId("app-shell").hidden = false;
+  activateView("chat");
 }
 
 function activateView(name) {
@@ -534,6 +820,7 @@ function activateView(name) {
     button.classList.toggle("is-active", active);
     if (active) button.setAttribute("aria-current", "page"); else button.removeAttribute("aria-current");
   });
+  all(".advanced-menu").forEach((menu) => { menu.open = name !== "chat"; });
   history.replaceState(null, "", "#" + name);
   byId("main-content").focus({ preventScroll: true });
   if (name === "devices") void loadDevices();
@@ -628,7 +915,7 @@ function renderConversation(turns) {
   host.replaceChildren();
   if (!turns.length) {
     const empty = element("div", "conversation-empty");
-    empty.append(element("p", "", "可以直接说要做什么。"), element("span", "", "例如：检查纳管节点状态、搜索最新 Pi 版本，或让 Codex 在受控工作区修改项目。"));
+    empty.append(element("p", "", "说吧，我在。"), element("span", "", "支持文字、语音、图片和短视频。复杂任务我会先用一句话说清楚下一步。"));
     host.append(empty);
     return;
   }
@@ -646,7 +933,9 @@ function renderConversation(turns) {
     if (turn.assistantReply || turn.status === "FAILED" || turn.status === "THINKING") {
       const friday = element("article", "message message-friday");
       friday.append(element("span", "message-label", "FRIDAY"));
-      const body = element("div", "message-body", turn.assistantReply || (turn.status === "THINKING" ? "正在处理…" : "这次没有完成。可以换一种说法后重试。"));
+      const reply = turn.assistantReply || (turn.status === "THINKING" ? "正在处理…" : "这次没有完成。可以换一种说法后重试。");
+      const body = element("div", "message-body markdown-body");
+      body.append(renderMarkdown(reply));
       if (turn.status === "FAILED") body.classList.add("message-error");
       friday.append(body);
       if (turn.jobProposal || turn.selfImprovementProposal) {
@@ -686,7 +975,7 @@ function renderConversation(turns) {
       if (turn.assistantReply) {
         const speak = element("button", "", "朗读");
         speak.type = "button";
-        speak.addEventListener("click", () => speakText(turn.assistantReply, speak));
+        speak.addEventListener("click", () => speakText(plainTextFromMarkdown(turn.assistantReply), speak));
         meta.append(speak);
       }
       friday.append(meta);
@@ -867,7 +1156,7 @@ byId("media-picker").addEventListener("change", async (event) => {
     appState.uploadInFlight = false;
     byId("attach").disabled = false;
     byId("send").disabled = appState.sending;
-    byId("composer-state").textContent = appState.talkActive ? "实时对讲 · 浏览器语音服务" : "";
+    byId("composer-state").textContent = appState.talkActive ? "语音模式 · 浏览器语音服务" : "";
   }
 });
 
@@ -893,7 +1182,7 @@ async function submitConversation(text) {
     appState.sending = false;
     byId("send").disabled = false;
     byId("attach").disabled = false;
-    byId("composer-state").textContent = appState.talkActive ? "实时对讲 · 浏览器语音服务" : "";
+    byId("composer-state").textContent = appState.talkActive ? "语音模式 · 浏览器语音服务" : "";
   }
 }
 
@@ -939,7 +1228,9 @@ async function toggleRecordedVoice() {
     recorder.addEventListener("stop", async () => {
       stream.getTracks().forEach((track) => track.stop());
       button.classList.remove("is-recording");
-      button.setAttribute("aria-label", "开始实时对讲");
+      button.setAttribute("aria-label", "开启语音模式");
+      button.setAttribute("aria-pressed", "false");
+      button.textContent = "语音模式";
       byId("composer-state").textContent = "正在转写语音…";
       try {
         const blob = new Blob(appState.voiceChunks, { type: recorder.mimeType || "audio/webm" });
@@ -948,13 +1239,15 @@ async function toggleRecordedVoice() {
         if (!response.ok) throw new Error(media.error && media.error.message ? media.error.message : "语音上传失败");
         const transcript = await post("/v2/voice/transcribe", { mediaId: media.media.id });
         const result = await submitConversation(transcript.text);
-        if (result && result.turn && result.turn.assistantReply) await speakBrowser(result.turn.assistantReply);
+        if (result && result.turn && result.turn.assistantReply) await speakBrowser(plainTextFromMarkdown(result.turn.assistantReply));
       } catch (error) { toast("语音没有转写完成：" + error.message); }
       finally { byId("composer-state").textContent = ""; appState.recorder = null; }
     });
     recorder.start();
     button.classList.add("is-recording");
-    button.setAttribute("aria-label", "结束录音回退");
+    button.setAttribute("aria-label", "结束语音模式");
+    button.setAttribute("aria-pressed", "true");
+    button.textContent = "结束语音";
     byId("composer-state").textContent = "录音回退中，再按一次结束";
   } catch (error) { toast("无法使用麦克风，请检查浏览器权限。"); }
 }
@@ -974,8 +1267,9 @@ function stopLiveTalk() {
   appState.speaking = false;
   const button = byId("voice");
   button.classList.remove("is-recording");
-  button.setAttribute("aria-label", "开始实时对讲");
-  button.textContent = "对讲";
+  button.setAttribute("aria-label", "开启语音模式");
+  button.setAttribute("aria-pressed", "false");
+  button.textContent = "语音模式";
   byId("composer-state").textContent = "";
 }
 
@@ -1001,12 +1295,12 @@ async function flushTalkTranscript() {
   try {
     const result = await submitConversation(text);
     if (appState.talkActive && result && result.turn && result.turn.assistantReply) {
-      await speakBrowser(result.turn.assistantReply);
+      await speakBrowser(plainTextFromMarkdown(result.turn.assistantReply));
     }
   } catch (error) {
     appState.talkTranscript = text;
     byId("message").value = text;
-    toast("实时对讲没有完成：" + error.message);
+    toast("语音模式没有完成：" + error.message);
   }
 }
 
@@ -1063,9 +1357,10 @@ async function toggleLiveTalk() {
   appState.talkTranscript = "";
   const button = byId("voice");
   button.classList.add("is-recording");
-  button.setAttribute("aria-label", "结束实时对讲");
-  button.textContent = "结束";
-  byId("composer-state").textContent = "实时对讲 · 浏览器语音服务";
+  button.setAttribute("aria-label", "结束语音模式");
+  button.setAttribute("aria-pressed", "true");
+  button.textContent = "结束语音";
+  byId("composer-state").textContent = "语音模式 · 正在听";
   try { appState.recognition.start(); }
   catch (_) { restartRecognition(); }
 }
@@ -1087,7 +1382,7 @@ function speakBrowser(text) {
     const finish = () => {
       appState.speaking = false;
       if (appState.currentUtterance === utterance) appState.currentUtterance = null;
-      if (appState.talkActive) byId("composer-state").textContent = "实时对讲 · 浏览器语音服务";
+      if (appState.talkActive) byId("composer-state").textContent = "语音模式 · 浏览器语音服务";
       resolve(true);
     };
     utterance.addEventListener("end", finish, { once: true });
@@ -1395,6 +1690,4 @@ function startEventStream() {
   });
 }
 
-const initialView = location.hash.slice(1);
-if (["chat", "devices", "tasks", "clearance"].includes(initialView)) activateView(initialView);
 void boot();`;

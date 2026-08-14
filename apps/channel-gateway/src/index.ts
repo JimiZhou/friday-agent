@@ -281,7 +281,7 @@ export async function pollIlinkOnce(config: IlinkConfig, cursor: string, signal:
   return { nextCursor, messages };
 }
 
-/** Sends the Friday reply through the official iLink sendmessage contract. */
+/** Sends the Friday reply through iLink's text item; Markdown is intentionally preserved for the client renderer. */
 export async function sendIlinkText(config: IlinkConfig, credentials: IlinkCredentials, inbound: Inbound, text: string, signal: AbortSignal, clientId = `friday-${inbound.messageId}`): Promise<void> {
   if (text.trim() === "" || Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) throw new Error("iLink reply is invalid");
   const endpoint = new URL("ilink/bot/sendmessage", ensureTrailingSlash(new URL(credentials.baseUrl)));
