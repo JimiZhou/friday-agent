@@ -70,7 +70,7 @@ sudo ./deploy/hub/install-hub.sh \
 - 构建 `friday-agent-hub:0.2.1`，启动 Hub 和 Channel Gateway；
 - 为 iLink 生成作用域化 ingest token；
 - Tailscale 模式执行 `tailscale serve --bg --https=443`，不执行 Funnel；
-- 只在终端输出一次 Web 密码与 Owner Token。
+- 只在终端输出一次 Web Basic Auth 密码与 Owner Token。
 
 如果私有 env 文件已存在，安装器会拒绝覆盖，避免重跑时意外轮换生产凭据。Hub 健康检查：
 
@@ -79,7 +79,7 @@ curl -fsS http://127.0.0.1:4310/health
 docker compose -f deploy/hub/compose.yml ps
 ```
 
-`FRIDAY_PUBLIC_ORIGIN` 必须与浏览器实际 Origin 完全一致，否则登录和所有带副作用的 Web 请求会被 Origin/CSRF 校验拒绝。
+`FRIDAY_PUBLIC_ORIGIN` 必须与浏览器实际 Origin 完全一致，否则所有带副作用的 Basic Auth Web 请求会被 Origin/CSRF 校验拒绝。
 
 ## 4. 模型与凭据
 
@@ -245,4 +245,4 @@ Hub 使用 SQLite WAL。备份必须使用 SQLite 一致性备份，或先停止
 
 MCP、Skill、Procedure 和自补丁 Registry 默认禁用。MCP 只能经独立 Broker Unix socket和精确 HTTPS Origin 白名单；Skill/Procedure 需要 Owner Ed25519 签名和 Sandbox 回放证据。Friday 自身补丁只能来自 `FRIDAY_SELF_WORKSPACE_ID` 并进入 `friday/self/*` 隔离分支。
 
-模型只能提出改进。Runner 测试证据通过后，Hub 才生成绑定 Manifest SHA-256 的 clearance。联网安装、重启和 Canary 为 R2；Policy、凭据、Root、删除和生产切换为 R3。Owner 必须在 Web 中看到背景、收益、风险、回滚和精确动作后授权。当前版本不会自动 Push `main`。
+模型只能提出结构化改进，Hub 自动启动预绑定的隔离任务。Runner 测试证据通过后，低风险候选自动进入 `ADOPTED` 并只汇报 brief；它表示进入下一次受控发布候选，不等于当前生产已变化。联网/依赖、重启、Canary 与 Git Push 至少为 R2；Policy、凭据、Root、删除和生产切换为 R3。重大变化仍必须在 Web 中展示背景、收益、风险、回滚和精确动作后授权。当前版本不会自动 Push `main`。

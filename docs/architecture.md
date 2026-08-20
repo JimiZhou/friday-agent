@@ -29,7 +29,7 @@ Friday 不是通用聊天平台，也不是让大模型直接持有 SSH、Root �
 
 ### 2.1 Owner 模型
 
-系统只存在一个逻辑 Owner。首版日常入口只有 HTTPS Web 密码会话、已扫码绑定的微信 iLink 和已配置的 Telegram Bot；Passkey 只是可选兼容登录，浏览器语音属于 Web 会话内输入。`channel + sender_id` 只有在 Web/本机部署流程完成配对后，才映射到唯一的 `owner_id`。
+系统只存在一个逻辑 Owner。首版日常入口只有 HTTPS Web Basic Auth、已扫码绑定的微信 iLink 和已配置的 Telegram Bot；浏览器语音属于 Web 会话内输入。`channel + sender_id` 只有在 Web/本机部署流程完成配对后，才映射到唯一的 `owner_id`。
 
 兼容入口 `/v1/messages` 仍只接受 Owner Token 保护的 Web 消息。M2 Channel Gateway 使用独立、哈希保存的 ingest token 写入 `/v2/inbound`，Hub 再校验配对、重放与群聊拒绝；请求体里的 `senderId` 与 `authStrength` 本身仍不是认证证明。
 
@@ -249,7 +249,7 @@ stateDiagram-v2
 
 ### 8.1 必须实施的控制
 
-- Web 默认只在 loopback/Tailnet 提供。单 Owner 密码只保存在 root-owned 环境文件中，登录有限流；Session Cookie 为 Secure、HttpOnly、SameSite，并校验 Origin/CSRF。Passkey/WebAuthn 仅为可选兼容入口。
+- Web 默认只在 loopback/Tailnet 提供。单 Owner Basic Auth 密码只保存在 root-owned 环境文件中，认证失败有限流；所有浏览器写操作同时校验固定 Origin 和非简单请求头，避免 Basic 凭据被跨站请求滥用。
 - Hub 和 Runner 使用独立最小权限系统账户；Hub 数据库、签名密钥、渠道 Token 和 Runner 密钥分目录授权。
 - Runner 仅建立出站连接，设备证书可单独吊销；公网连接必须使用 mTLS 和短时租约。
 - Sandbox 显式挂载 Workspace，默认拒绝宿主 home、Docker socket、SSH agent 和其他仓库。
@@ -268,7 +268,7 @@ stateDiagram-v2
 
 ## 9. Memory、Skill 与自我迭代
 
-长期学习与自我迭代采用“候选 -> 隔离变更 -> 验证 -> clearance -> Canary -> 可撤销”，不做隐式在线训练：
+长期学习与自我迭代采用“候选 -> 隔离变更 -> 验证 -> 低风险自动采纳 / 重大变化 clearance -> Canary -> 可撤销”，不做隐式在线训练：
 
 | 类型 | 内容 | 晋级条件 |
 | --- | --- | --- |
@@ -281,7 +281,7 @@ M1 起使用 SQLite + FTS5 即可，不提前引入向量数据库；M0 仍是 J
 
 Friday 对自身的迭代只允许从 `FRIDAY_SELF_WORKSPACE_ID` 指定的源码 Workspace 取回补丁，并登记到 `friday/self/*` 隔离分支。模型只能给出结构化 `selfImprovementProposal`，Hub 派生改进 ID、分支、Runner 和 R1 Job。自我改进记录必须说明类别（Pi 升级、架构、能力、安全或依赖）、背景、预期收益、风险、回滚方案和所需动作，并绑定源 Job、补丁 SHA-256 与测试证据。测试证据由 Runner 生成，绑定 Hub 签名的 Job Manifest、固定执行镜像、输出与补丁摘要；模型文本、未预绑定的普通 Job 和其他私人 Workspace 不能晋级。Hub 根据声明动作、补丁路径和新增命令重算 clearance：普通联网安装、服务重启和 Canary 为 R2；Policy、凭据、Root、删除或生产切换为 R3。模型不能提交风险等级或“已批准”状态。
 
-证据校验通过后，Hub 自动生成 clearance 请求。clearance 是带随机 ID 和 Manifest SHA-256 的持久对象。只有匹配的 Owner grant 才能从 `WAIT_APPROVAL` 进入 `CLEARED`，只有同一个已授权 clearance 才能启动 Canary。配置 Web 控制台后，grant、Canary 启动和结果确认必须使用密码或可选 Passkey 签发的 Owner Web Session，并通过 Origin/CSRF 校验；Owner Bearer Token 不再作为回退。当前实现不会自行 Push `main`；真实部署切换必须继续经过受控发布与回滚流程。
+低风险自我迭代会自动启动预绑定的隔离 R1 Job，完成补丁和可信测试证据后由 `TESTED` 自动进入 `ADOPTED`，向 Owner 汇报 brief，不要求额外授权。`ADOPTED` 只表示已采纳为下一次受控发布候选，不表示当前生产版本已经变化。Hub 会根据真实补丁路径、新增命令和所需动作重新判断；联网/依赖、服务重启、Canary、Git Push、Policy/凭据/Root、删除和生产切换会自动生成 clearance 请求。clearance 是带随机 ID 和 Manifest SHA-256 的持久对象，只有匹配的 Owner Basic Auth 请求才能从 `WAIT_APPROVAL` 进入 `CLEARED` 并启动 Canary。当前实现不会自行 Push `main`；真实部署切换必须继续经过受控发布与回滚流程。
 
 ## 10. 版本与运行治理
 
@@ -380,7 +380,7 @@ Friday 对自身的迭代只允许从 `FRIDAY_SELF_WORKSPACE_ID` 指定的源码
 
 范围：模型提出 Pi/依赖升级和架构优化、隔离补丁、测试证据、风险背景说明、Owner clearance、Canary 与回滚。
 
-当前已实现：模型结构化提案、Owner 先批 R1 隔离任务、源 Job 意图绑定、Runner 测试证据、成功制品自动晋级、Hub 派生 R2/R3、clearance ID/Manifest 绑定、`CLEARED` 与 Canary 门禁。尚未实现：周期性且默认关闭的发现器、独立部署执行器、真实 Pi current/next 双轨 Canary 和自动回滚证据采集。
+当前已实现：模型结构化提案、Hub 自动启动预绑定 R1 隔离任务、源 Job 意图绑定、Runner 测试证据、低风险候选自动进入 `ADOPTED`、重大变化由 Hub 派生 R2/R3、clearance ID/Manifest 绑定、`CLEARED` 与 Canary 门禁。尚未实现：周期性且默认关闭的发现器、独立部署执行器、真实 Pi current/next 双轨 Canary 和自动回滚证据采集。
 
 ## 12. 当前关键决策
 

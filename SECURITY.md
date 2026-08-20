@@ -27,6 +27,7 @@ The intended release boundary is:
 - one self-hosted Owner;
 - loopback-only Hub and Gateway control listeners;
 - tailnet/private HTTPS access, with no Tailscale Funnel by default;
+- browser-native single-Owner Basic Auth, with fixed-Origin and custom-header checks on every Web mutation;
 - outbound-only per-device Runner identity;
 - public-key or Tailscale SSH onboarding, never password authentication in `fridayctl`;
 - root-owned Sandbox supervision and content-pinned Agent images;

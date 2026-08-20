@@ -174,6 +174,14 @@ function tokenMatches(expected: string, actual: string | undefined): boolean {
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
 }
 
+function basicOwnerMatches(ownerId: string, password: string, actual: string | undefined): boolean {
+  if (actual === undefined || !actual.startsWith("Basic ") || actual.length > 1024) return false;
+  const expected = `Basic ${Buffer.from(`${ownerId}:${password}`, "utf8").toString("base64")}`;
+  const expectedBuffer = Buffer.from(expected);
+  const actualBuffer = Buffer.from(actual);
+  return expectedBuffer.length === actualBuffer.length && timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
 function singleHeader(value: string | string[] | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
@@ -812,14 +820,15 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (idempotency.outcome === "conflict") return { outcome: "rejected", code: "JOB_IDEMPOTENCY_CONFLICT", message: "Turn id is already bound to a different Job request" };
       if (idempotency.outcome === "duplicate") {
         selfImprovementJobRegistry.register(idempotency.job, improvementId, context);
-        return { outcome: "created", job: idempotency.job };
+        const job = idempotency.job.status === "WAIT_APPROVAL" ? jobRegistry.approve(idempotency.job.jobId, config.ownerId) : idempotency.job;
+        return { outcome: "created", job };
       }
       if (selfPatchRegistry.get(improvementId) !== undefined) return { outcome: "rejected", code: "SELF_IMPROVEMENT_ID_CONFLICT", message: "The derived improvement id is already registered" };
       const selection = selectFleetRunner({ workspaceId: proposal.workspaceId, tool: proposal.tool }, fleetSchedulingContext());
       if (selection === undefined) return { outcome: "rejected", code: "NO_COMPATIBLE_RUNNER", message: "No online enrolled Runner matches this self improvement proposal" };
       const result = jobRegistry.create({ ...input, runnerId: selection.runnerId });
       selfImprovementJobRegistry.register(result.job, improvementId, context);
-      return { outcome: "created", job: result.job };
+      return { outcome: "created", job: jobRegistry.approve(result.job.jobId, config.ownerId) };
     } catch {
       return { outcome: "rejected", code: "SELF_IMPROVEMENT_JOB_REJECTED", message: "The Hub rejected the self improvement Job" };
     }
@@ -834,6 +843,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     selfImprovementWorkspaceId,
     tools: conversationTools,
     invokeTool: invokeConversationTool,
+    memories: () => memoryRegistry.exportConfirmed(),
+    remember: (candidate, source) => { memoryRegistry.add(source, candidate.value); },
     loadImages: (input) => (input.attachments ?? []).flatMap((attachment): PiWorkerImageV1[] => {
       if (attachment.kind !== "image") return [];
       const stored = conversationMediaRegistry.read(attachment.id);
@@ -860,6 +871,18 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
 
   function ownerAuthorized(request: IncomingMessage, method: string): boolean {
     if (tokenMatches(config.ownerToken, request.headers.authorization)) return true;
+    const authorization = singleHeader(request.headers.authorization);
+    if (config.webPassword !== undefined && authorization?.startsWith("Basic ")) {
+      const key = passwordLoginKey(request);
+      if (!passwordLoginAllowed(key)) return false;
+      if (!basicOwnerMatches(config.ownerId, config.webPassword, authorization)) {
+        recordPasswordFailure(key);
+        return false;
+      }
+      passwordFailures.delete(key);
+      if (isStateChanging(method) && (singleHeader(request.headers.origin) !== config.publicOrigin || singleHeader(request.headers["x-friday-csrf"]) !== "basic")) return false;
+      return true;
+    }
     if (webauthnRegistry === undefined) return false;
     if (isStateChanging(method) && singleHeader(request.headers.origin) !== config.publicOrigin) return false;
     return webauthnRegistry.validateSession(
@@ -873,6 +896,9 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     // A local-only deployment may use its high-entropy Owner token. Once the
     // Web console is configured, R2/R3 grants require a browser Owner session
     // plus CSRF/Origin checks; bearer fallback is intentionally not accepted.
+    if (config.webPassword !== undefined && basicOwnerMatches(config.ownerId, config.webPassword, singleHeader(request.headers.authorization))) {
+      return singleHeader(request.headers.origin) === config.publicOrigin && (!isStateChanging(method) || singleHeader(request.headers["x-friday-csrf"]) === "basic");
+    }
     if (webauthnRegistry === undefined) return tokenMatches(config.ownerToken, request.headers.authorization);
     if (singleHeader(request.headers.origin) !== config.publicOrigin) return false;
     return webauthnRegistry.validateSession(
@@ -965,14 +991,17 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         !isWebAuthnBootstrapContinue &&
         !isWebAuthnLogin &&
         !isPasswordLogin &&
-        !isAuthStatus &&
-        !isPublicWeb &&
-        !isPublicWebAsset &&
+        !(isAuthStatus && config.webPassword === undefined) &&
+        !(isPublicWeb && config.webPassword === undefined) &&
+        !(isPublicWebAsset && config.webPassword === undefined) &&
         !isChannelInbound &&
         !isChannelOutbox &&
         !ownerAuthorized(request, method)
       ) {
-        error(response, 401, "UNAUTHORIZED", "A valid bearer token is required");
+        if (config.webPassword !== undefined && (isAuthStatus || isPublicWeb || isPublicWebAsset)) {
+          response.setHeader("www-authenticate", 'Basic realm="Friday Agent", charset="UTF-8"');
+        }
+        error(response, 401, "UNAUTHORIZED", config.webPassword === undefined ? "A valid bearer token is required" : "Friday Basic Auth credentials are required");
         return;
       }
 
@@ -990,9 +1019,10 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       }
 
       if (isAuthStatus) {
-        const authenticated = webauthnRegistry?.validateSession(cookieValue(request, "friday_owner"), undefined, false) === true;
+        const authenticated = ownerAuthorized(request, method);
         json(response, 200, {
           authenticated,
+          authMode: config.webPassword === undefined ? "session" : "basic",
           passwordEnabled: config.webPassword !== undefined,
           passkeyConfigured: (webauthnRegistry?.credentialCount() ?? 0) > 0,
         });
@@ -1224,6 +1254,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
             duplicate = result.duplicate;
           }
           const registered = selfImprovementJobRegistry.register(job, requestInput.improvementId, requestInput.context);
+          if (job.status === "WAIT_APPROVAL") job = jobRegistry.approve(job.jobId, config.ownerId);
           json(response, duplicate || registered.duplicate ? 200 : 202, {
             accepted: true,
             duplicate: duplicate || registered.duplicate,
@@ -1245,7 +1276,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       }
 
       if (method === "GET" && url.pathname === "/v4/self-improvements") {
-        json(response, 200, { improvements: selfPatchRegistry.listImprovements(), execution: "clearance-gated-canary-only" });
+        json(response, 200, { improvements: selfPatchRegistry.listImprovements(), execution: "auto-adopt-low-risk-clearance-gated-release" });
         return;
       }
       if (method === "POST" && url.pathname === "/v4/self-improvements") {
@@ -1276,8 +1307,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           error(response, 400, "INVALID_SELF_IMPROVEMENT_EVIDENCE", "A test evidence SHA-256 is required"); return;
         }
         try {
-          selfPatchRegistry.markTested(improvementTested[1], body.value.evidenceSha256);
-          json(response, 200, { improvement: selfPatchRegistry.getImprovement(improvementTested[1]) });
+          json(response, 200, { improvement: selfPatchRegistry.completeImprovementTest(improvementTested[1], body.value.evidenceSha256) });
         } catch { error(response, 409, "SELF_IMPROVEMENT_NOT_TESTABLE", "Self improvement cannot accept this evidence"); }
         return;
       }
@@ -1395,6 +1425,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (method === "POST" && url.pathname === "/v2/memory/candidates") {
         const body=await parseJsonBody(request,config.maxBodyBytes);if(!isRecord(body.value)||Object.keys(body.value).length!==2||typeof body.value.source!=="string"||typeof body.value.candidate!=="string"){error(response,400,"INVALID_MEMORY","source and candidate are required");return;}try{json(response,201,{id:memoryRegistry.add(body.value.source,body.value.candidate),status:"PENDING"});}catch{error(response,400,"INVALID_MEMORY","Memory candidate was rejected");}return;
       }
+      if (method === "GET" && url.pathname === "/v2/memory/candidates") { json(response,200,{memories:memoryRegistry.list()});return; }
       const memoryConfirm=url.pathname.match(/^\/v2\/memory\/candidates\/([a-f0-9]+)\/confirm$/i); if(method==="POST"&&memoryConfirm?.[1]!==undefined){const body=await parseJsonBody(request,config.maxBodyBytes);if(!isRecord(body.value)||Object.keys(body.value).some(k=>k!=="correction")||(body.value.correction!==undefined&&typeof body.value.correction!=="string")){error(response,400,"INVALID_MEMORY","Invalid confirmation");return;}try{memoryRegistry.confirm(memoryConfirm[1],body.value.correction as string|undefined);json(response,200,{confirmed:true});}catch{error(response,409,"MEMORY_NOT_CONFIRMABLE","Memory candidate cannot be confirmed");}return;}
       const memoryDelete=url.pathname.match(/^\/v2\/memory\/candidates\/([a-f0-9]+)$/i); if(method==="DELETE"&&memoryDelete?.[1]!==undefined){memoryRegistry.remove(memoryDelete[1]);json(response,200,{deleted:true});return;}
       if(method==="GET"&&url.pathname==="/v2/memory/export"){json(response,200,{memories:memoryRegistry.exportConfirmed()});return;}

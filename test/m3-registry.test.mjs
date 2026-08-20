@@ -185,7 +185,7 @@ test("self improvements explain background and derive clearance risk without tru
     riskSummary: "Model claims low risk", rollbackPlan: "Restore prior route", requestedActions: ["test"],
   });
   assert.equal(inferred.requestedActions.includes("policy_change"), true, "Hub must infer control-root risk from touched paths");
-  assert.equal(inferred.requestedActions.includes("canary_deploy"), true);
+  assert.equal(inferred.clearanceRequired, true);
   registry.markTested("hidden-core-risk", sha("c"));
   assert.equal(registry.requestClearance("hidden-core-risk").clearance?.risk, "R3");
   registry.db.prepare("UPDATE self_improvements_v1 SET background='tampered after clearance' WHERE patch_id='hidden-core-risk'").run();
@@ -198,6 +198,32 @@ test("self improvements explain background and derive clearance risk without tru
   assert.equal(hiddenRoot.requestedActions.includes("root_access"), true, "Hub must infer risky added commands from patch content");
   registry.markTested("hidden-root-risk", sha("d"));
   assert.equal(registry.requestClearance("hidden-root-risk").clearance?.risk, "R3");
+
+  const briefOnly = registry.createImprovement("brief-only", "friday/self/brief-only", "diff --git a/docs/voice.md b/docs/voice.md\n", {
+    category: "capability", title: "Clarify voice guidance", background: "Users miss the interruption gesture", expectedBenefit: "Faster voice onboarding",
+    riskSummary: "Documentation wording may be unclear", rollbackPlan: "Restore the prior copy", requestedActions: ["test", "rollback"],
+  });
+  assert.equal(briefOnly.clearanceRequired, false);
+  const adopted = registry.completeImprovementTest("brief-only", sha("e"));
+  assert.equal(adopted.state, "ADOPTED", "low-risk work is adopted automatically after trusted test evidence");
+  assert.equal(adopted.clearance, undefined);
+  assert.equal(registry.completeImprovementTest("brief-only", sha("e")).state, "ADOPTED", "evidence replay remains idempotent");
+  assert.throws(() => registry.requestClearance("brief-only"), /does not require clearance|test evidence/);
+
+  const restartNeeded = registry.createImprovement("restart-needed", "friday/self/restart-needed", "diff --git a/docs/runtime.md b/docs/runtime.md\n", {
+    category: "capability", title: "Reload runtime guidance", background: "Runtime guidance changed", expectedBenefit: "New guidance is active",
+    riskSummary: "A service restart affects active conversations", rollbackPlan: "Keep the current service running", requestedActions: ["test", "service_restart", "canary_deploy", "rollback"],
+  });
+  assert.equal(restartNeeded.clearanceRequired, true, "service restarts and Canary deployment remain material effects");
+
+  registry.createImprovement("legacy-tested", "friday/self/legacy-tested", "diff --git a/docs/help.md b/docs/help.md\n", {
+    category: "capability", title: "Clarify help copy", background: "Help copy is unclear", expectedBenefit: "Faster onboarding",
+    riskSummary: "Wording may still be unclear", rollbackPlan: "Restore the prior copy", requestedActions: ["test", "rollback"],
+  });
+  registry.markTested("legacy-tested", sha("f"));
+  registry.close();
+  registry.open();
+  assert.equal(registry.getImprovement("legacy-tested")?.state, "ADOPTED", "startup migrates prior low-risk TESTED candidates to ADOPTED");
 });
 
 test("M3 self patch preparation changes only an isolated worktree, never live main", async (t) => {
@@ -242,15 +268,16 @@ test("M3 Hub routes are Owner-only and the external broker stays fail closed", a
     id: "agent-upgrade", branch: "friday/self/agent-upgrade", patch: "diff --git a/a b/a\n",
     category: "architecture", title: "Separate the orchestration queue", background: "Conversation and Job mutations need independent recovery evidence.",
     expectedBenefit: "Smaller failure domains.", riskSummary: "Queue migration may strand an in-flight turn.", rollbackPlan: "Restore the prior Hub image and schema-compatible database backup.",
-    requestedActions: ["test", "service_restart", "canary_deploy", "rollback"],
+    requestedActions: ["test", "service_restart", "canary_deploy", "production_cutover", "rollback"],
   });
   assert.equal(improvementCreate.status, 201);
   assert.equal((await improvementCreate.json()).improvement.state, "DRAFT");
-  assert.equal((await call("/v4/self-improvements/agent-upgrade/tested", { evidenceSha256: sha("e") })).status, 200);
-  const clearanceResponse = await call("/v4/self-improvements/agent-upgrade/clearance-request", {});
-  assert.equal(clearanceResponse.status, 200);
-  const clearance = (await clearanceResponse.json()).improvement.clearance;
-  assert.equal(clearance.risk, "R2");
+  const testedResponse = await call("/v4/self-improvements/agent-upgrade/tested", { evidenceSha256: sha("e") });
+  assert.equal(testedResponse.status, 200);
+  const testedImprovement = (await testedResponse.json()).improvement;
+  assert.equal(testedImprovement.state, "WAIT_APPROVAL", "material changes automatically create a clearance request after tests");
+  const clearance = testedImprovement.clearance;
+  assert.equal(clearance.risk, "R3");
   assert.equal((await call("/v4/self-improvements/agent-upgrade/clearance-grant", { clearanceId: randomUUID() })).status, 409);
   const granted = await call("/v4/self-improvements/agent-upgrade/clearance-grant", { clearanceId: clearance.clearanceId });
   assert.equal(granted.status, 200);

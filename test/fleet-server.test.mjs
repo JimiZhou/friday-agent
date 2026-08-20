@@ -111,7 +111,7 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
   };
   const improvementJob = await request(base, "/v4/self-improvement-jobs", improvementRequest);
   assert.equal(improvementJob.response.status, 202);
-  assert.equal(improvementJob.body.job.status, "WAIT_APPROVAL");
+  assert.equal(improvementJob.body.job.status, "DISPATCHED");
   assert.equal(improvementJob.body.job.risk, "R1");
   assert.equal(improvementJob.body.improvementJob.state, "PENDING");
   assert.equal(improvementJob.body.improvementJob.branch, "friday/self/upgrade-recovery-path");
@@ -124,7 +124,6 @@ test("Hub auto target resolves to an online enrolled sandbox Runner and remains 
   const wrongWorkspace = await request(base, "/v4/self-improvement-jobs", { ...improvementRequest, idempotencyKey: randomUUID(), improvementId: "wrong-private-workspace", workspaceId: "infra" });
   assert.equal(wrongWorkspace.response.status, 409);
   assert.equal(wrongWorkspace.body.error.code, "SELF_IMPROVEMENT_WORKSPACE_REJECTED");
-  friday.jobRegistry.approve(improvementJob.body.job.jobId, "owner");
   assert.match(friday.jobRegistry.get(improvementJob.body.job.jobId).spec.prompt, /FRIDAY_SELF_IMPROVEMENT_JOB_V1/);
 
   const unavailable = await request(base, "/v2/jobs", {

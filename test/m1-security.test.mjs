@@ -15,7 +15,7 @@ import { JOB_PROTOCOL_VERSION, runnerRequestSignaturePayloadV2 } from "../packag
 
 const ownerToken = "a-secure-owner-token-for-tests";
 
-test("Owner Web uses a password session and CSRF while bearer automation remains scoped", async (t) => {
+test("Owner Web opens through Basic Auth while browser writes keep Origin and CSRF protection", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-owner-web-"));
   t.after(() => rm(stateDir, { recursive: true, force: true }));
   const webPassword = "owner-web-password-for-tests";
@@ -24,52 +24,40 @@ test("Owner Web uses a password session and CSRF while bearer automation remains
   const address = await friday.start();
   t.after(() => friday.stop());
   const base = `http://${address.host}:${address.port}`;
-  const web = await fetch(`${base}/`);
+  const basic = `Basic ${Buffer.from(`owner:${webPassword}`).toString("base64")}`;
+  const webChallenge = await fetch(`${base}/`);
+  assert.equal(webChallenge.status, 401);
+  assert.equal(webChallenge.headers.get("www-authenticate"), 'Basic realm="Friday Agent", charset="UTF-8"');
+  const web = await fetch(`${base}/`, { headers: { authorization: basic } });
   assert.equal(web.status, 200);
   const webHtml = await web.text();
-  assert.match(webHtml, /Owner 密码/);
+  assert.match(webHtml, /Basic Auth · 私有连接/);
+  assert.match(webHtml, /记忆与成长/);
   assert.match(webHtml, /data-view="chat"/);
   assert.match(webHtml, /data-view="devices"/);
   assert.match(webHtml, /data-view="tasks"/);
   assert.match(webHtml, /data-view="clearance"/);
   assert.match(webHtml, /src="\/assets\/friday\.js"/);
   assert.doesNotMatch(webHtml, /<script[^>]*>\s*const/);
-  const script = await fetch(`${base}/assets/friday.js`);
+  const script = await fetch(`${base}/assets/friday.js`, { headers: { authorization: basic } });
   assert.equal(script.status, 200);
   assert.match(script.headers.get("content-type"), /text\/javascript/);
   const statusBefore = await fetch(`${base}/v2/auth/status`);
-  assert.deepEqual(await statusBefore.json(), { authenticated: false, passwordEnabled: true, passkeyConfigured: false });
-  const rejected = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { "content-type": "application/json", origin }, body: "{}" });
+  assert.equal(statusBefore.status, 401);
+  const status = await fetch(`${base}/v2/auth/status`, { headers: { authorization: basic } });
+  assert.deepEqual(await status.json(), { authenticated: true, authMode: "basic", passwordEnabled: true, passkeyConfigured: false });
+  const rejected = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { authorization: basic, "content-type": "application/json", origin }, body: "{}" });
   assert.equal(rejected.status, 401);
-  const badLogin = await fetch(`${base}/v2/auth/login`, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ password: "wrong-password" }) });
-  assert.equal(badLogin.status, 401);
-  const login = await fetch(`${base}/v2/auth/login`, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ password: webPassword }) });
-  assert.equal(login.status, 200);
-  const setCookies = login.headers.getSetCookie();
-  const ownerCookie = setCookies.find((cookie) => cookie.startsWith("friday_owner="))?.split(";")[0];
-  const csrfCookie = setCookies.find((cookie) => cookie.startsWith("friday_csrf="))?.split(";")[0];
-  assert.ok(ownerCookie);
-  assert.ok(csrfCookie);
-  assert.match(setCookies.find((cookie) => cookie.startsWith("friday_owner=")), /Secure; HttpOnly; SameSite=Strict/);
-  const cookie = `${ownerCookie}; ${csrfCookie}`;
-  const csrf = csrfCookie.slice("friday_csrf=".length);
-  const statusAfter = await fetch(`${base}/v2/auth/status`, { headers: { cookie } });
-  assert.equal((await statusAfter.json()).authenticated, true);
-  const csrfRejected = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { cookie, "content-type": "application/json", origin }, body: "{}" });
-  assert.equal(csrfRejected.status, 401);
-  const sessionAccepted = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { cookie, "x-friday-csrf": csrf, "content-type": "application/json", origin }, body: "{}" });
-  assert.equal(sessionAccepted.status, 400);
+  const wrongOrigin = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { authorization: basic, "x-friday-csrf": "basic", "content-type": "application/json", origin: "https://evil.example.test" }, body: "{}" });
+  assert.equal(wrongOrigin.status, 401);
+  const basicAccepted = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { authorization: basic, "x-friday-csrf": "basic", "content-type": "application/json", origin }, body: "{}" });
+  assert.equal(basicAccepted.status, 400);
+  const bearerAccepted = await fetch(`${base}/v2/jobs`, { method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" }, body: "{}" });
+  assert.equal(bearerAccepted.status, 400, "bearer automation remains available outside the browser authentication path");
   const passkeyLogin = await fetch(`${base}/v2/auth/login/options`, { method: "POST", headers: { "content-type": "application/json", origin }, body: "{}" });
   assert.equal(passkeyLogin.status, 401, "Passkey remains optional and cannot authenticate without an enrolled credential");
   const bootstrap = await fetch(`${base}/v2/auth/bootstrap`, { method: "POST", headers: { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" }, body: "{}" });
   assert.equal(bootstrap.status, 201);
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const failure = await fetch(`${base}/v2/auth/login`, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ password: "still-wrong" }) });
-    assert.equal(failure.status, 401);
-  }
-  const rateLimited = await fetch(`${base}/v2/auth/login`, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ password: webPassword }) });
-  assert.equal(rateLimited.status, 429);
-  assert.equal(rateLimited.headers.get("retry-after"), "600");
 });
 
 test("sandboxd accepts only a signed job worktree and produces a no-network Docker plan", async (t) => {
