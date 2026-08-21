@@ -142,6 +142,7 @@ cat <<EOF
 
 Friday Agent Hub is ready.
 Web URL:       $origin
+Web username:  owner
 Web password:  $password
 Owner token:   $owner_token
 

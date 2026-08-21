@@ -3,14 +3,24 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+export interface MemoryView {
+  readonly id: string;
+  readonly value: string;
+  readonly source: string;
+  readonly status: "PENDING" | "CONFIRMED";
+  readonly createdAt: string;
+  readonly confirmedAt?: string;
+}
+
 export class MemoryRegistry {
   #db: DatabaseSync | undefined;
   constructor(readonly path: string) {}
   open(): void { this.#db = new DatabaseSync(this.path); this.#db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS memory_candidates_v1 (id TEXT PRIMARY KEY, source TEXT NOT NULL, candidate TEXT NOT NULL, status TEXT NOT NULL, correction TEXT, created_at TEXT NOT NULL, confirmed_at TEXT, deleted_at TEXT) STRICT;"); }
   close(): void { this.#db?.close(); this.#db = undefined; }
-  add(source: string, candidate: string): string { requireText(source,"source",256); requireText(candidate,"candidate",4096); const id=randomBytes(16).toString("hex"), now=new Date().toISOString(); this.db.prepare("INSERT INTO memory_candidates_v1 VALUES (?, ?, ?, 'PENDING', NULL, ?, NULL, NULL)").run(id,source,candidate,now); return id; }
+  add(source: string, candidate: string): string { requireText(source,"source",256); requireText(candidate,"candidate",4096); const normalized=candidate.trim();const existing=this.db.prepare("SELECT id FROM memory_candidates_v1 WHERE candidate=? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1").get(normalized) as {id:string}|undefined;if(existing!==undefined)return existing.id;const id=randomBytes(16).toString("hex"), now=new Date().toISOString(); this.db.prepare("INSERT INTO memory_candidates_v1 VALUES (?, ?, ?, 'PENDING', NULL, ?, NULL, NULL)").run(id,source,normalized,now); return id; }
   confirm(id: string, correction?: string): void { requireId(id); if(correction!==undefined) requireText(correction,"correction",4096); const result=this.db.prepare("UPDATE memory_candidates_v1 SET status='CONFIRMED', correction=?, confirmed_at=? WHERE id=? AND status='PENDING' AND deleted_at IS NULL").run(correction??null,new Date().toISOString(),id); if (result.changes !== 1) throw new Error("Memory candidate is not confirmable"); }
   remove(id: string): void { requireId(id); this.db.prepare("UPDATE memory_candidates_v1 SET status='DELETED', deleted_at=? WHERE id=? AND deleted_at IS NULL").run(new Date().toISOString(),id); }
+  list(): readonly MemoryView[] { return (this.db.prepare("SELECT id, COALESCE(correction,candidate) AS value, source, status, created_at AS createdAt, confirmed_at AS confirmedAt FROM memory_candidates_v1 WHERE status IN ('PENDING','CONFIRMED') AND deleted_at IS NULL ORDER BY CASE status WHEN 'PENDING' THEN 0 ELSE 1 END, created_at DESC LIMIT 200").all() as Array<{id:string;value:string;source:string;status:"PENDING"|"CONFIRMED";createdAt:string;confirmedAt:string|null}>).map(({confirmedAt,...value})=>({...value,...(confirmedAt===null?{}:{confirmedAt})})); }
   exportConfirmed(): readonly {id:string;value:string;source:string}[] { return this.db.prepare("SELECT id, COALESCE(correction,candidate) AS value, source FROM memory_candidates_v1 WHERE status='CONFIRMED' AND deleted_at IS NULL").all() as {id:string;value:string;source:string}[]; }
   get db(): DatabaseSync { const db=this.#db; if(db===undefined) throw new Error("Memory registry is not open"); return db; }
 }

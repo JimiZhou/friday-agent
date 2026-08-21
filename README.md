@@ -8,12 +8,12 @@ Friday Agent 是一个单用户、自托管的私人设备管家。你通过 Web
 
 ## 它能做什么
 
-- 用 Web 控制台对话，查看设备、任务、Diff、制品和待授权操作。
+- 通过浏览器原生 Basic Auth 进入 Web 控制台，对话并查看设备、任务、Diff、制品、长期记忆和待授权操作。
 - 接收文字、图片和短视频；在受支持的浏览器中连续语音识别、朗读和开口打断。
 - 在微信 iLink 扫码绑定后收发私聊；通过 Telegram Bot 接受唯一 Owner 的私聊。远端任务完成、失败或取消后，Gateway 会持久化重试并回推终态和有界结果摘要。
 - 自动选择已登记、在线且能力匹配的节点：通用 Remote Agent 使用独立临时运行目录，Codex、Pi 或 Claude Code 使用独立 Git Worktree；两者都进入无网络 Sandbox。
 - 通过 Hub 提供受限网络搜索；MCP、Skill 和 Procedure 默认关闭，启用前需要来源、版本、能力和回放证据。
-- 让外部模型提出 Pi 升级或架构改进，但只能先生成隔离补丁和测试证据。涉及联网安装、重启、部署、凭据、Root 或删除时，Friday 必须说明背景、风险和回滚方案，并申请 R2/R3 clearance。
+- 允许 Friday 提出并自动启动隔离改进：低风险补丁在可信测试通过后自动采纳为下一次受控发布候选，只汇报 brief；联网/依赖、服务重启、Canary、Git Push、策略/凭据、Root、删除或生产切换仍需说明背景、风险和回滚方案，并申请 clearance。
 
 ```mermaid
 flowchart LR
@@ -55,12 +55,12 @@ sudo ./deploy/hub/install-hub.sh \
 安装器会：
 
 1. 创建低权限 `friday-hub` 用户和私有状态目录；
-2. 生成 Owner Token、Web 密码、Gateway control/ingest token；
+2. 生成 Owner Token、Web Basic Auth 密码、Gateway control/ingest token；
 3. 构建并启动 loopback Hub 与独立 Channel Gateway；
 4. 配置 `tailscale serve`，但绝不启用 Funnel；
 5. 输出 Web 地址和一次性展示的 Owner 凭据。
 
-打开 Web 控制台后，可在“设备”页面直接生成微信 iLink 二维码并扫码确认。
+打开 Web 控制台时只需输入安装器输出的 Owner 用户名和 Basic Auth 密码；进入后可在“设备”页面直接生成微信 iLink 二维码并扫码确认。
 
 ### 配置 Telegram
 
@@ -182,7 +182,7 @@ curl -fsS http://127.0.0.1:4310/health
 
 ## 项目状态与非目标
 
-已验证的核心包括：Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器对讲，通用 Remote Agent 与逐调用 Node Tool Policy，固定 Codex/Pi/Claude CLI 的 Sandbox HTTP 合约，真实节点工具的多步循环，短时模型凭据代理，以及 Self Improvement 的测试证据、R2/R3 clearance 和 Canary 门禁。公开测试使用受控模型 fixture；每次生产部署仍必须使用自己的 Provider 完成只读 Remote Agent E2E。
+已验证的核心包括：Basic Auth Web/iLink/Telegram 消息边界，多 Runner 调度，图片/视频输入，浏览器连续对讲，Owner 确认后注入对话的长期记忆，通用 Remote Agent 与逐调用 Node Tool Policy，固定 Codex/Pi/Claude CLI 的 Sandbox HTTP 合约，真实节点工具的多步循环，短时模型凭据代理，以及 Self Improvement 的测试证据和重大变化 clearance 门禁。低风险自我迭代会自动进入隔离 Workspace 修改和测试，随后进入 `ADOPTED` 并以 brief 汇报；这表示已采纳为下一次受控发布候选，不表示当前生产版本已变化。联网/依赖、服务重启、Canary、Git Push、策略/凭据/Root、删除和生产切换仍需 Owner 授权。公开测试使用受控模型 fixture；每次生产部署仍必须使用自己的 Provider 完成只读 Remote Agent E2E。
 
 `v0.2.1` 仍不承诺 macOS/Windows Runner 安装器、自建 WebRTC 音频流、开放插件市场、多租户、无人审批生产变更或自治 Root 运维。Self Improvement 当前不会自动 Push `main`；真实部署切换仍需要明确 clearance 和受控发布流程。
 

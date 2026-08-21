@@ -10,7 +10,7 @@ export interface FridayConfig {
   ownerToken: string;
   publicOrigin?: string;
   webauthnRpId?: string;
-  /** Simple single-Owner Web login secret, stored only in the root-owned Hub env file. */
+  /** Single-Owner Web Basic Auth secret, stored only in the root-owned Hub env file. */
   webPassword?: string;
   /** Enables the fixed-origin, no-secret web search tool available to Pi. */
   webSearchEnabled?: boolean;

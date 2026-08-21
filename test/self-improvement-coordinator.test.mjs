@@ -22,7 +22,7 @@ const context = {
   expectedBenefit: "Owner can inspect one evidence-bound candidate before any deployment.",
   riskSummary: "A bad candidate could break Hub startup if it were deployed.",
   rollbackPlan: "Keep current immutable image and discard the next candidate on failed Canary.",
-  requestedActions: ["test", "service_restart", "canary_deploy", "rollback"],
+  requestedActions: ["test", "dependency_install", "service_restart", "canary_deploy", "rollback"],
 };
 
 async function fixture(t, improvementId = "job-derived-change") {
@@ -42,6 +42,20 @@ async function fixture(t, improvementId = "job-derived-change") {
   const spec = jobs.pull(approved.runnerId);
   assert.ok(spec);
   return { stateDir, jobs, improvements, bindings, artifacts, spec, coordinator: new SelfImprovementCoordinator(bindings, jobs, artifacts, improvements) };
+}
+
+async function lowRiskFixture(t, improvementId = "brief-only-change") {
+  const value = await fixture(t, improvementId);
+  value.bindings.db.prepare("UPDATE self_improvement_jobs_v1 SET context_json=? WHERE job_id=?").run(JSON.stringify({
+    category: "capability",
+    title: "Clarify a conversation hint",
+    background: "The first-use prompt is easy to miss.",
+    expectedBenefit: "Owners reach the first useful conversation faster.",
+    riskSummary: "The wording may still be unclear.",
+    rollbackPlan: "Restore the prior wording in the next release candidate.",
+    requestedActions: ["test", "rollback"],
+  }), value.spec.jobId);
+  return value;
 }
 
 function event(spec, sequence, partial) {
@@ -80,6 +94,28 @@ test("a pre-bound successful R1 Job becomes an evidence-bound clearance request"
   assert.equal(promoted.improvement.clearance.risk, "R2");
   assert.match(promoted.improvement.clearance.clearanceId, /^[0-9a-f-]{36}$/);
   assert.equal((await value.coordinator.observe(value.spec.jobId)).binding.state, "PROMOTED", "replay must be idempotent");
+});
+
+test("a low-risk successful self improvement is adopted automatically without clearance", async (t) => {
+  const value = await lowRiskFixture(t);
+  const stdout = "copy test passed\n";
+  const patchBytes = Buffer.from("diff --git a/docs/voice.md b/docs/voice.md\n--- a/docs/voice.md\n+++ b/docs/voice.md\n@@ -1 +1 @@\n-old\n+new\n", "utf8");
+  const patchArtifact = await saveArtifact(value.artifacts, value.spec, "changes.diff", "text/x-diff", patchBytes);
+  const evidenceBytes = Buffer.from(JSON.stringify(createTestEvidence(value.spec, `sha256:${"d".repeat(64)}`, stdout, "", patchBytes)));
+  const evidenceArtifact = await saveArtifact(value.artifacts, value.spec, "test-evidence.json", "application/json", evidenceBytes);
+  for (const item of [
+    event(value.spec, 0, { type: "state", state: "RUNNING" }),
+    event(value.spec, 1, { type: "output", stream: "stdout", chunk: stdout }),
+    event(value.spec, 2, { type: "artifact", artifact: patchArtifact }),
+    event(value.spec, 3, { type: "artifact", artifact: evidenceArtifact }),
+    event(value.spec, 4, { type: "state", state: "SUCCEEDED" }),
+  ]) value.jobs.acceptEvent(item);
+
+  const promoted = await value.coordinator.observe(value.spec.jobId);
+  assert.equal(promoted.binding.state, "PROMOTED");
+  assert.equal(promoted.improvement.state, "ADOPTED");
+  assert.equal(promoted.improvement.clearanceRequired, false);
+  assert.equal(promoted.improvement.clearance, undefined);
 });
 
 test("model text and a successful status cannot forge mismatched test evidence", async (t) => {

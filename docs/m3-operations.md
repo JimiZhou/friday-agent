@@ -1,6 +1,6 @@
 # M3 受控扩展与自我改进
 
-M3 不把“可扩展”变成模型可自行安装的插件市场。所有登记、验证、启用、回滚和 Canary 决策均为 Owner Web/Owner Token 的显式操作；Channel Gateway 没有这些接口的凭据。
+M3 不把“可扩展”变成模型可自行安装的插件市场。MCP、适配器、Procedure、Skill 与任何产生外部副作用的变更仍需 Owner Web/Owner Token 显式操作；只有无外部副作用、通过绑定测试证据的低风险自我补丁可以由 Hub 自动采纳为下一次受控发布候选。Channel Gateway 没有这些接口的凭据。
 
 ## MCP / Search
 
@@ -27,11 +27,14 @@ M3 不把“可扩展”变成模型可自行安装的插件市场。所有登�
 `/v3/self-patches` 只保存以 `friday/self/<name>` 分支命名、以 `diff --git` 开头的受限 Patch 摘要。状态只能按下列顺序前进：
 
 ```text
-DRAFT --test evidence--> TESTED --R2/R3--> WAIT_APPROVAL
-      --matching approval + canary id--> CANARY --success--> DEPLOYED
-                                              --failure--> ROLLED_BACK
+DRAFT --test evidence--> TESTED --low risk--> ADOPTED (next controlled release candidate)
+                             |
+                             +--material effect / R2-R3--> WAIT_APPROVAL
+                                   --matching clearance--> CLEARED
+                                   --canary id-----------> CANARY --success--> DEPLOYED
+                                                               --failure--> ROLLED_BACK
 ```
 
-Registry 不会改写运行中的 `main`、不会自动 Push，也不会部署 Canary。`self-patch-worktree` 提供的操作员侧原语只会创建 `friday/self/*` 分支的隔离 worktree、以 `git apply --check` 校验 Diff，并且仅在该 worktree 内应用已校验补丁；测试覆盖了 live `main` 不发生变化。实际操作员仍必须运行测试、审阅 Diff、用 Owner Web Session 完成 R2/R3 审批，并以已知 Canary 标识记录结果；失败则记录 `ROLLED_BACK`。每次操作应保留测试日志/制品的 SHA-256 作为证据。
+Registry 不会改写运行中的 `main`、不会自动 Push，也不会部署 Canary。低风险记录进入 `ADOPTED` 后只进入下一次受控发布候选队列，不等于上线。`self-patch-worktree` 提供的操作员侧原语只会创建 `friday/self/*` 分支的隔离 worktree、以 `git apply --check` 校验 Diff，并且仅在该 worktree 内应用已校验补丁；测试覆盖了 live `main` 不发生变化。涉及联网/依赖、服务重启、Canary、Git Push、Policy/凭据/Root、删除或生产切换时，操作员仍必须审阅 Diff、用 Owner Web 完成 R2/R3 clearance，并以已知 Canary 标识记录结果；失败则记录 `ROLLED_BACK`。每次操作应保留测试日志/制品的 SHA-256 作为证据。
 
 操作员可用 `friday-self-patch prepare <repository-root> <state-directory> <id> <friday/self/branch> <patch-file>` 创建并校验 worktree；只有显式 `apply-test` 才会在该隔离 worktree 内应用补丁并运行固定的 `npm test`。这两个命令均不会对 live `main` 执行 checkout、reset、commit 或 push。

@@ -216,11 +216,9 @@ export class SelfImprovementCoordinator {
     try {
       improvement = this.improvements.createImprovementFromJob(binding.improvementId, binding.branch, patch, binding.context, job.jobId);
       if (improvement.state === "DRAFT") {
-        this.improvements.markTested(binding.improvementId, evidenceArtifact.sha256);
-        improvement = this.improvements.getImprovement(binding.improvementId) as SelfImprovementView;
+        improvement = this.improvements.completeImprovementTest(binding.improvementId, evidenceArtifact.sha256);
       }
-      if (improvement.state === "TESTED") improvement = this.improvements.requestClearance(binding.improvementId);
-      if (improvement.state !== "WAIT_APPROVAL" && improvement.state !== "CLEARED" && improvement.state !== "CANARY" && improvement.state !== "DEPLOYED" && improvement.state !== "ROLLED_BACK") {
+      if (improvement.state !== "ADOPTED" && improvement.state !== "WAIT_APPROVAL" && improvement.state !== "CLEARED" && improvement.state !== "CANARY" && improvement.state !== "DEPLOYED" && improvement.state !== "ROLLED_BACK") {
         throw new PromotionValidationError("IMPROVEMENT_STATE_INVALID");
       }
     } catch (error) {
@@ -238,7 +236,7 @@ export function selfImprovementJobPrompt(improvementId: string, context: SelfImp
   return [
     "FRIDAY_SELF_IMPROVEMENT_JOB_V1",
     "Work only in the assigned isolated worktree. Implement the bounded candidate and run relevant tests.",
-    "Do not deploy, push, access credentials, change live services, or claim clearance. Leave the tested changes as a Git diff for Hub review.",
+    "Do not deploy, push, access credentials, change live services, or claim clearance. Leave the tested changes as a Git diff so the Hub can either adopt a low-risk candidate or request clearance for material effects.",
     `Hub improvement id: ${improvementId}`,
     `Owner-visible context: ${JSON.stringify(context)}`,
     `Task: ${task}`,

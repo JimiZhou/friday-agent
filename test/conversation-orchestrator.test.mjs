@@ -52,6 +52,10 @@ async function registerFleetRunner(friday, workspaceId = "infra") {
 
 test("conversation output schema rejects model-controlled authority fields", () => {
   assert.deepEqual(parseConversationAgentOutput('{"reply":"节点状态正常"}'), { reply: "节点状态正常" });
+  assert.deepEqual(parseConversationAgentOutput('{"reply":"我先把它列为候选，等你确认后再长期使用。","memoryCandidate":{"value":"回答时先给结论"}}'), {
+    reply: "我先把它列为候选，等你确认后再长期使用。",
+    memoryCandidate: { value: "回答时先给结论" },
+  });
   assert.deepEqual(parseConversationAgentOutput('{"reply":"读取节点状态","toolCall":{"name":"fleet_status","input":""}}'), {
     reply: "读取节点状态",
     toolCall: { name: "fleet_status", input: "" },
@@ -99,9 +103,36 @@ test("conversation output schema rejects model-controlled authority fields", () 
     })), /unsupported|invalid/);
   }
   assert.throws(() => parseConversationAgentOutput(JSON.stringify({ reply: "ambiguous", jobProposal: valid.jobProposal, selfImprovementProposal: selfImprovement.selfImprovementProposal })), /two proposals/);
+  assert.throws(() => parseConversationAgentOutput(JSON.stringify({ reply: "ambiguous", jobProposal: valid.jobProposal, memoryCandidate: { value: "preference" } })), /cannot be combined/);
   assert.throws(() => parseConversationAgentOutput(JSON.stringify({ reply: "unsafe", toolCall: { name: "web_search", input: "pi", url: "https://example.test" } })), /unsupported/);
   assert.throws(() => parseConversationAgentOutput(JSON.stringify({ reply: "unsafe", toolCall: { name: "shell", input: "id" } })), /name is invalid/);
   assert.throws(() => parseConversationAgentOutput("```json\n{\"reply\":\"no\"}\n```"), /without Markdown/);
+});
+
+test("conversation memory stays pending until Owner confirmation and then reaches later prompts", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-memory-"));
+  const outputs = [
+    JSON.stringify({ reply: "我先把这条偏好列为候选，等你确认。", memoryCandidate: { value: "回答时先给结论，再给必要细节" } }),
+    JSON.stringify({ reply: "明白。" }),
+  ];
+  const agent = { calls: [], async runTurn(turn) { this.calls.push(turn); return outputs.shift(); }, async close() {} };
+  const friday = await createFridayServer(
+    { host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, maxBodyBytes: 1_048_576 },
+    { conversationAgent: agent },
+  );
+  t.after(async () => { await friday.stop(); await rm(stateDir, { recursive: true, force: true }); });
+  const address = await friday.start();
+  const base = `http://${address.host}:${address.port}`;
+  const first = await request(base, "/v4/conversations/main/messages", { messageId: randomUUID(), channel: "web", text: "记住：回答时先给结论，再给必要细节" });
+  assert.equal(first.response.status, 201);
+  const candidates = await request(base, "/v2/memory/candidates");
+  assert.equal(candidates.body.memories.length, 1);
+  assert.equal(candidates.body.memories[0].status, "PENDING");
+  assert.doesNotMatch(agent.calls[0].prompt, /回答时先给结论，再给必要细节.*ownerMemories/);
+  const confirmed = await request(base, `/v2/memory/candidates/${candidates.body.memories[0].id}/confirm`, {});
+  assert.equal(confirmed.response.status, 200);
+  await request(base, "/v4/conversations/main/messages", { messageId: randomUUID(), channel: "web", text: "继续" });
+  assert.match(agent.calls[1].prompt, /ownerMemories=.*回答时先给结论，再给必要细节/);
 });
 
 test("conversation tool loop exposes only listed Hub tools and treats search output as untrusted data", async (t) => {
@@ -350,7 +381,7 @@ test("Hub fleet_status tool returns bounded node facts without Runner identities
   assert.equal(agent.calls[1].prompt.includes(runnerId), false, "fleet tool must not expose Runner identity to the model");
 });
 
-test("external model self-improvement proposals create only a pre-bound R1 candidate Job", async (t) => {
+test("external model self-improvement proposals auto-start only a pre-bound isolated R1 Job", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-self-improvement-"));
   const output = JSON.stringify({
     reply: "背景：恢复路径需要收敛。先申请执行隔离 R1 任务；测试通过后 Friday 会展示风险并申请 R2/R3 clearance。",
@@ -377,7 +408,7 @@ test("external model self-improvement proposals create only a pre-bound R1 candi
   assert.equal(result.body.turn.selfImprovementProposal.category, "architecture");
   assert.equal(result.body.scheduling.job.runnerId, runnerId);
   assert.equal(result.body.scheduling.job.risk, "R1");
-  assert.equal(result.body.scheduling.job.status, "WAIT_APPROVAL");
+  assert.equal(result.body.scheduling.job.status, "DISPATCHED");
   const binding = friday.selfImprovementJobRegistry.get(result.body.scheduling.job.jobId);
   assert.equal(binding.state, "PENDING");
   assert.match(binding.improvementId, /^agent-[a-f0-9]{32}$/);

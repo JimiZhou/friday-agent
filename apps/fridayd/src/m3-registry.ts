@@ -384,7 +384,7 @@ export function skillPayload(skill: Omit<SignedSkill, "signature">): string {
   return JSON.stringify({ capabilities: [...skill.capabilities].sort(), contentSha256: skill.contentSha256, id: skill.id, source: skill.source, version: skill.version });
 }
 
-export type SelfPatchState = "DRAFT" | "TESTED" | "WAIT_APPROVAL" | "CLEARED" | "CANARY" | "DEPLOYED" | "ROLLED_BACK" | "FAILED";
+export type SelfPatchState = "DRAFT" | "TESTED" | "ADOPTED" | "WAIT_APPROVAL" | "CLEARED" | "CANARY" | "DEPLOYED" | "ROLLED_BACK" | "FAILED";
 export type ApprovalRisk = "R2" | "R3";
 export interface SelfPatchView { readonly id: string; readonly branch: string; readonly patchSha256: string; readonly state: SelfPatchState; readonly approvalRisk?: ApprovalRisk; readonly evidenceSha256?: string; readonly canaryId?: string; }
 
@@ -424,13 +424,15 @@ export interface SelfImprovementClearance {
 
 export interface SelfImprovementView extends SelfPatchView, SelfImprovementContext {
   readonly sourceJobId?: string;
+  readonly clearanceRequired: boolean;
   readonly clearance?: SelfImprovementClearance;
 }
 
 /**
  * This registry is an audit gate, not a Git writer. A patch is never applied
- * to main and Friday never pushes it. An external deployment operator can use
- * the recorded patch only after test evidence and R2/R3 approval.
+ * to main and Friday never pushes it. A low-risk improvement can be adopted
+ * automatically after bound test evidence, while material changes still need
+ * clearance before an external deployment operator may run a Canary.
  */
 export class SelfPatchRegistry {
   #db: DatabaseSync | undefined;
@@ -461,6 +463,13 @@ export class SelfPatchRegistry {
     const columns = this.db.prepare("PRAGMA table_info(self_improvements_v1)").all() as { name: string }[];
     if (!columns.some((column) => column.name === "source_job_id")) this.db.exec("ALTER TABLE self_improvements_v1 ADD COLUMN source_job_id TEXT");
     this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS self_improvements_source_job_v1 ON self_improvements_v1(source_job_id) WHERE source_job_id IS NOT NULL");
+    const tested = this.db.prepare(`SELECT patch_id AS id FROM self_improvements_v1
+      JOIN self_patches_v2 ON self_patches_v2.id=self_improvements_v1.patch_id
+      WHERE self_patches_v2.state='TESTED'`).all() as { id: string }[];
+    for (const row of tested) {
+      const improvement = this.getImprovement(row.id);
+      if (improvement !== undefined && !improvement.clearanceRequired) this.#transition(row.id, "ADOPTED");
+    }
   }
   close(): void { this.#db?.close(); this.#db = undefined; }
   create(id: string, branch: string, patch: string): void {
@@ -517,6 +526,21 @@ export class SelfPatchRegistry {
     return this.#requireImprovement(id);
   }
   markTested(id: string, evidenceSha256: string): void { this.#transition(id, "TESTED", { evidenceSha256 }); }
+  completeImprovementTest(id: string, evidenceSha256: string): SelfImprovementView {
+    const current = this.#requireImprovement(id);
+    if (
+      current.evidenceSha256 === evidenceSha256 &&
+      ["ADOPTED", "WAIT_APPROVAL", "CLEARED", "CANARY", "DEPLOYED", "ROLLED_BACK"].includes(current.state)
+    ) return current;
+    if (current.state === "DRAFT") this.markTested(id, evidenceSha256);
+    const tested = this.#requireImprovement(id);
+    if (tested.state !== "TESTED" || tested.evidenceSha256 !== evidenceSha256) {
+      throw new Error("Self improvement does not match this test evidence");
+    }
+    if (selfImprovementNeedsClearance(tested.requestedActions)) return this.requestClearance(id);
+    this.#transition(id, "ADOPTED");
+    return this.#requireImprovement(id);
+  }
   requestApproval(id: string, risk: ApprovalRisk): void {
     if (this.getImprovement(id) !== undefined) throw new Error("Self improvements require a Hub-derived clearance request");
     if (risk !== "R2" && risk !== "R3") throw new Error("Self patches require R2 or R3 approval"); this.#transition(id, "WAIT_APPROVAL", { approvalRisk: risk });
@@ -528,6 +552,7 @@ export class SelfPatchRegistry {
   requestClearance(id: string): SelfImprovementView {
     const improvement = this.#requireImprovement(id);
     if (improvement.state !== "TESTED" || improvement.evidenceSha256 === undefined) throw new Error("Self improvement requires test evidence before clearance");
+    if (!selfImprovementNeedsClearance(improvement.requestedActions)) throw new Error("Low-risk self improvement is adopted automatically and does not require clearance");
     const risk = improvementRisk(improvement.requestedActions);
     const clearanceId = randomUUID();
     const requestedAt = new Date().toISOString();
@@ -630,7 +655,7 @@ export class SelfPatchRegistry {
           ...(typeof row.clearanceGrantedBy === "string" ? { grantedBy: row.clearanceGrantedBy } : {}),
         }
       : undefined;
-    const view: SelfImprovementView = { ...patch, ...context, ...(typeof row.sourceJobId === "string" ? { sourceJobId: row.sourceJobId } : {}), ...(clearance === undefined ? {} : { clearance }) };
+    const view: SelfImprovementView = { ...patch, ...context, clearanceRequired: selfImprovementNeedsClearance(context.requestedActions), ...(typeof row.sourceJobId === "string" ? { sourceJobId: row.sourceJobId } : {}), ...(clearance === undefined ? {} : { clearance }) };
     if (
       clearance !== undefined &&
       hash(JSON.stringify(clearanceManifest(view, clearance.clearanceId, clearance.risk, clearance.requestedAt))) !== clearance.manifestSha256
@@ -693,19 +718,17 @@ export function validateSelfImprovementContext(context: SelfImprovementContext):
 function normalizeImprovementContext(context: SelfImprovementContext, patch: string): SelfImprovementContext {
   validateSelfImprovementContext(context);
   const actions = new Set<SelfImprovementAction>(context.requestedActions);
-  // Every self modification needs reproducible validation, a bounded Canary,
-  // and a rollback path even when the model forgets to request them.
+  // Every self modification needs reproducible validation and a rollback
+  // path. The Hub escalates only material effects; isolated low-risk work can
+  // finish with a tested brief instead of an Owner approval ceremony.
   actions.add("test");
-  actions.add("canary_deploy");
   actions.add("rollback");
   if (context.category === "pi_upgrade" || context.category === "dependency") {
     actions.add("network_access");
     actions.add("dependency_install");
     actions.add("service_restart");
   }
-  if (context.category === "architecture" || context.category === "capability" || context.category === "security") {
-    actions.add("service_restart");
-  }
+  if (context.category === "security") actions.add("policy_change");
   const paths = [...patch.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].flatMap((match) => [match[1] ?? "", match[2] ?? ""]);
   if (paths.some((path) => /(?:^|\/)(?:package(?:-lock)?\.json|npm-shrinkwrap\.json)$/.test(path))) {
     actions.add("network_access");
@@ -760,6 +783,21 @@ function improvementRisk(actions: readonly SelfImprovementAction[]): ApprovalRis
     : "R2";
 }
 
+export function selfImprovementNeedsClearance(actions: readonly SelfImprovementAction[]): boolean {
+  return actions.some((action) =>
+    action === "network_access" ||
+    action === "dependency_install" ||
+    action === "service_restart" ||
+    action === "canary_deploy" ||
+    action === "git_push" ||
+    action === "policy_change" ||
+    action === "credential_access" ||
+    action === "root_access" ||
+    action === "data_delete" ||
+    action === "production_cutover"
+  );
+}
+
 function clearanceManifest(
   improvement: SelfImprovementView,
   clearanceId: string,
@@ -800,5 +838,5 @@ function requireText(value: string, label: string, maximum: number): void { if (
 function requirePatchId(value: string): void { if (!/^[a-z][a-z0-9-]{0,63}$/.test(value)) throw new Error("Invalid self patch id"); }
 function requireUuid(value: string, label: string): void { if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) throw new Error(`Invalid ${label}`); }
 function hash(value: string): string { return createHash("sha256").update(value).digest("hex"); }
-function allowed(current: SelfPatchState, next: SelfPatchState): boolean { return ({ DRAFT: ["TESTED", "FAILED"], TESTED: ["WAIT_APPROVAL", "FAILED"], WAIT_APPROVAL: ["CLEARED", "CANARY", "ROLLED_BACK"], CLEARED: ["CANARY", "ROLLED_BACK"], CANARY: ["DEPLOYED", "ROLLED_BACK", "FAILED"], DEPLOYED: [], ROLLED_BACK: [], FAILED: [] } as Record<SelfPatchState, readonly SelfPatchState[]>)[current].includes(next); }
+function allowed(current: SelfPatchState, next: SelfPatchState): boolean { return ({ DRAFT: ["TESTED", "FAILED"], TESTED: ["ADOPTED", "WAIT_APPROVAL", "FAILED"], ADOPTED: [], WAIT_APPROVAL: ["CLEARED", "CANARY", "ROLLED_BACK"], CLEARED: ["CANARY", "ROLLED_BACK"], CANARY: ["DEPLOYED", "ROLLED_BACK", "FAILED"], DEPLOYED: [], ROLLED_BACK: [], FAILED: [] } as Record<SelfPatchState, readonly SelfPatchState[]>)[current].includes(next); }
 function readMcpOutput(value: unknown): string { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("MCP returned invalid JSON-RPC response"); const result = (value as Record<string, unknown>).result; if (typeof result !== "object" || result === null || Array.isArray(result)) throw new Error("MCP returned an error or invalid result"); const content = (result as Record<string, unknown>).content; if (!Array.isArray(content) || content.length === 0 || content.length > 64) throw new Error("MCP returned invalid content"); const text = content.map((part) => typeof part === "object" && part !== null && !Array.isArray(part) && (part as Record<string, unknown>).type === "text" && typeof (part as Record<string, unknown>).text === "string" ? (part as Record<string, unknown>).text as string : "[non-text MCP content omitted]").join("\n"); if (Buffer.byteLength(text, "utf8") > 1_048_576) throw new Error("MCP output exceeds maximum size"); return text; }

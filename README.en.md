@@ -8,12 +8,12 @@ Friday Agent is a single-owner, self-hosted steward for private devices. You tal
 
 ## What it does
 
-- Provides a Web console for chat, devices, jobs, diffs, artifacts, and clearance requests.
+- Opens the Web console through browser-native Basic Auth for chat, devices, jobs, diffs, artifacts, long-term memory, and clearance requests.
 - Accepts text, images, and short videos, plus continuous browser speech recognition, read-aloud replies, and barge-in where supported.
 - Sends and receives paired private chats through WeChat iLink and one-owner Telegram Bots. When a remote task completes, fails, or is cancelled, the Gateway durably retries delivery of its terminal state and bounded result summary.
 - Selects an enrolled, online, capability-matched node. The general Remote Agent gets a per-Job runtime directory, while Codex, Pi, and Claude Code get isolated Git worktrees; both enter a no-network sandbox.
 - Exposes bounded web search to the Hub. MCP, Skills, and Procedures remain disabled until their source, version, capabilities, and replay evidence are approved.
-- Allows an external model to propose Pi upgrades and architecture changes, but only as isolated patches with test evidence. Networked installs, restarts, deployments, credentials, root access, and deletion require an R2/R3 clearance that explains context, risk, and rollback.
+- Lets Friday propose and automatically start isolated improvements. A low-risk patch with trusted test evidence is adopted for the next controlled release and reported as a brief; network or dependency changes, service restarts, Canary deployment, Git pushes, policy or credential access, root, deletion, and production cutover still require explicit clearance.
 
 ## Trust model
 
@@ -39,7 +39,7 @@ sudo ./deploy/hub/install-hub.sh \
   --network tailscale
 ```
 
-The installer creates a low-privilege service account and private state, generates scoped credentials, starts the loopback Hub and Channel Gateway, configures Tailscale Serve without Funnel, and prints the Web URL plus one-time Owner credentials. Open the Web console to bind WeChat iLink by QR code.
+The installer creates a low-privilege service account and private state, generates scoped credentials, starts the loopback Hub and Channel Gateway, configures Tailscale Serve without Funnel, and prints the Web URL plus one-time Owner credentials. Enter the Owner username and Basic Auth password in the browser, then bind WeChat iLink by QR code.
 
 ### Telegram
 
@@ -128,7 +128,7 @@ More detail:
 
 ## Status and license
 
-The validated core covers Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, browser talk, a general Remote Agent with per-call Node Tool policy, sandbox HTTP contracts for pinned Codex/Pi/Claude CLIs, a multi-step loop with real node tools, short-lived credential proxying, and Self Improvement test evidence with R2/R3 clearance and canary gates. Public tests use a controlled model fixture; every production deployment must still complete a read-only Remote Agent E2E with its own provider.
+The validated core covers Basic Auth Web/iLink/Telegram message boundaries, multi-Runner scheduling, image/video input, continuous browser talk, Owner-confirmed long-term memory injected into later conversations, a general Remote Agent with per-call Node Tool policy, sandbox HTTP contracts for pinned Codex/Pi/Claude CLIs, a multi-step loop with real node tools, short-lived credential proxying, and Self Improvement evidence with automatic low-risk adoption plus material-change clearance gates. `ADOPTED` means accepted for the next controlled release, not active in production. Public tests use a controlled model fixture; every production deployment must still complete a read-only Remote Agent E2E with its own provider.
 
 `v0.2.1` does not promise macOS/Windows installers, self-hosted WebRTC audio, an open plugin marketplace, multi-tenancy, unattended production changes, or autonomous root administration. Self Improvement never pushes `main` automatically.
 
