@@ -72,6 +72,10 @@ test("fridayd configuration rejects unsafe hosts, credentials, and owner ids", (
     FRIDAY_OWNER_TOKEN: "o".repeat(32),
   };
 
+  assert.equal(loadConfig(valid).channelFleetManagementEnabled, undefined);
+  assert.equal(loadConfig({ ...valid, FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE: "1" }).channelFleetManagementEnabled, true);
+  assert.throws(() => loadConfig({ ...valid, FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE: "yes" }), /FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE must be 0 or 1/);
+
   for (const host of ["0.0.0.0", "::", "localhost", "private-hub.example"]) {
     assert.throws(
       () => loadConfig({ ...valid, FRIDAY_HOST: host }),

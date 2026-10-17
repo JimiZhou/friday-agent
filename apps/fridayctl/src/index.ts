@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import { bootstrapPlan, bootstrapRunner, installSandboxd, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, runnerUpgradePlan, sandboxInstallPlan, upgradeRunner } from "./bootstrap.js";
 
-export { bootstrapPlan, bootstrapRunner, createRunnerRelease, createSandboxdRelease, installSandboxd, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, runnerUpgradePlan, sandboxInstallPlan, upgradeRunner } from "./bootstrap.js";
+export { bootstrapPlan, bootstrapRunner, createRunnerRelease, createSandboxdRelease, installSandboxd, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, readEnrollmentFile, runnerUpgradePlan, sandboxInstallPlan, upgradeRunner } from "./bootstrap.js";
 export type { BootstrapOptions, BootstrapResult, RunnerRelease, RunnerUpgradeOptions, RunnerUpgradeResult, SandboxInstallOptions, SandboxInstallResult, WorkspaceBootstrap } from "./bootstrap.js";
 
 async function main(): Promise<void> {

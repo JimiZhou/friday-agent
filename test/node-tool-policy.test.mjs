@@ -27,6 +27,7 @@ test("system snapshot follows the standard os-release symlink without widening f
   const result = await invokeNodeTool({ name: "system.snapshot", arguments: {} });
   assert.equal(typeof result.observedAt, "string");
   assert.equal(result.osRelease.exitCode ?? 0, 0);
+  assert.equal(result.disk.arguments.includes("-l"), true);
 });
 
 test("Hub derives per-call risk, signs exact R0 authority, and pauses higher-risk calls", async (t) => {

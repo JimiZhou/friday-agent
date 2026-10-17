@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
-import { bootstrapPlan, createRunnerRelease, createSandboxdRelease, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, runnerUpgradePlan, sandboxInstallPlan } from "../apps/fridayctl/dist/index.js";
+import { bootstrapPlan, createRunnerRelease, createSandboxdRelease, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, readEnrollmentFile, runnerUpgradePlan, sandboxInstallPlan } from "../apps/fridayctl/dist/index.js";
 
 const execFile = promisify(execFileCallback);
 const repository = new URL("../", import.meta.url).pathname;
@@ -26,6 +26,17 @@ test("fridayctl accepts only SSH-safe, token-free bootstrap arguments", () => {
   assert.equal(options.controlUrl.href, "http://127.0.0.1:54310/");
   assert.deepEqual(options.workspaces, [{ workspaceId: "infra", path: "/srv/friday-workspaces/infra" }]);
   assert.equal(bootstrapPlan(options).length, 6);
+
+  const handoffOptions = parseBootstrapArguments([
+    "runner", "bootstrap", "ubuntu@node.example",
+    "--hub-url", "https://hub.example",
+    "--runner-name", "workstation",
+    "--service-user", "ubuntu",
+    "--enrollment-file", "./runner-enrollment.json",
+    "--dry-run",
+  ], {});
+  assert.equal(handoffOptions.enrollmentFile, join(process.cwd(), "runner-enrollment.json"));
+  assert.match(bootstrapPlan(handoffOptions).join("\n"), /one-time enrollment/);
 
   assert.throws(() => parseBootstrapArguments([
     "runner", "bootstrap", "-oProxyCommand=bad",
@@ -139,6 +150,29 @@ test("fridayctl release contains a runnable compiled Runner and no TypeScript so
   assert.match(upgradeInstaller, /Runner upgrade failed; restoring the previous release/);
   assert.doesNotMatch(upgradeInstaller, /ENROLLMENT|OWNER_TOKEN/);
   assert.doesNotMatch(await readFile(join(repository, "deploy", "runner", "friday-runner-managed@.service"), "utf8"), /ENROLLMENT|OWNER_TOKEN/);
+});
+
+test("fridayctl accepts only a private, unexpired enrollment handoff file", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "fridayctl-enrollment-test-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, "enrollment.json");
+  const credential = {
+    runnerId: "018f6f57-51d4-7b48-a3a3-c5e8b194aaf2",
+    enrollmentToken: "a".repeat(43),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
+  await writeFile(path, JSON.stringify(credential), { mode: 0o600 });
+  assert.deepEqual(await readEnrollmentFile(path), credential);
+
+  await chmod(path, 0o644);
+  await assert.rejects(readEnrollmentFile(path), /mode 0600/);
+  await chmod(path, 0o600);
+  await writeFile(path, JSON.stringify({ ...credential, expiresAt: new Date(Date.now() - 1).toISOString() }), { mode: 0o600 });
+  await assert.rejects(readEnrollmentFile(path), /invalid or expired/);
+
+  const link = join(directory, "enrollment-link.json");
+  await symlink(path, link);
+  await assert.rejects(readEnrollmentFile(link));
 });
 
 test("fridayctl builds a digestable Sandbox release with the pinned Agent runtime", async (t) => {

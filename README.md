@@ -77,6 +77,17 @@ unset FRIDAY_TELEGRAM_BOT_TOKEN FRIDAY_TELEGRAM_OWNER_ID
 
 Gateway 只接受这个 Owner 的私聊，拒绝群聊、其他 sender 和消息重放。
 
+### 通过 IM 管理 Runner
+
+Hub 默认关闭 IM 纳管命令。仅在 Telegram/iLink 已与 Owner 私聊配对后，才在 Hub 私有环境配置中启用 `FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE=1`。可用命令：
+
+- `/runner help`：查看命令；`/runner list`：列出节点 ID、纳管状态、在线状态和未完成任务数。
+- `/runner add`：签发十分钟、一次性 Runner 凭据；只在当前私聊回复中显示，不要转发或发到群聊。
+- `/runner revoke <runnerId>`：发起撤销；必须在两分钟内原样回复 `确认撤销节点 <runnerId>`。有未完成任务时拒绝撤销；待确认节点会暂时退出调度。
+- `/runner cancel`：清除待确认撤销。
+
+`/runner add` 提供安全的 JSON 凭据交接，不会通过 IM 执行任意 SSH 或 Shell。将凭据保存为当前用户拥有且权限为 `0600` 的本地文件，然后运行 `fridayctl runner bootstrap <user@host> ... --enrollment-file <file>`；`fridayctl` 仍要求通过 `FRIDAY_OWNER_TOKEN` 校验上线状态，并在远端安装成功后删除交接文件。若需执行真实任务，仍须单独安装 Sandbox 并按现有审批规则授权。
+
 ## 快速纳管子节点
 
 运行 `fridayctl` 的机器需要 Node.js `>=22.19.0`。目标节点需要 Linux/systemd、Node.js `>=22.19.0`，并已有服务用户以及 root 或免交互 `sudo`。先构建本地管理工具：

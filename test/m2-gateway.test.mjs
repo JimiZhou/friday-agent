@@ -22,6 +22,39 @@ test("M2 Hub accepts only paired channel ingress and durable replay rejection", 
   const badAck=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:randomUUID()})});assert.equal(badAck.status,409);
   const ack=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:deliveryBody.notification.leaseId})});assert.equal(ack.status,200);assert.equal((await ack.json()).delivered,true);
 });
+
+test("paired IM Runner commands issue enrollment once and return actionable state", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "m2-fleet-im-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const ownerToken = "m2-fleet-im-owner-token-long-enough";
+  const server = await createFridayServer({ host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, maxBodyBytes: 1_048_576, channelFleetManagementEnabled: true });
+  const address = await server.start();
+  t.after(() => server.stop());
+  const base = `http://${address.host}:${address.port}`;
+  const owner = { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" };
+  const rotate = await fetch(`${base}/v2/channels/rotate`, { method: "POST", headers: owner, body: JSON.stringify({ channel: "telegram" }) });
+  const { token } = await rotate.json();
+  await fetch(`${base}/v2/channels/pair`, { method: "POST", headers: owner, body: JSON.stringify({ channel: "telegram", senderId: "owner" }) });
+
+  let issued = 0;
+  const issueEnrollment = server.runnerRegistry.issueEnrollment.bind(server.runnerRegistry);
+  server.runnerRegistry.issueEnrollment = (...args) => { issued += 1; return issueEnrollment(...args); };
+  const inbound = { channel: "telegram", token, senderId: "owner", messageId: randomUUID(), group: false, text: "/runner add" };
+  const first = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inbound) });
+  const firstBody = await first.json();
+  assert.equal(first.status, 202);
+  assert.match(firstBody.reply, /enrollmentToken/);
+  assert.equal(issued, 1);
+
+  const replay = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inbound) });
+  const replayBody = await replay.json();
+  assert.equal(replayBody.duplicate, true);
+  assert.doesNotMatch(replayBody.reply, /enrollmentToken/);
+  assert.equal(issued, 1);
+
+  const help = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...inbound, messageId: randomUUID(), text: "/runner help" }) });
+  assert.match((await help.json()).reply, /\/runner revoke/);
+});
 test("Telegram and iLink provider fixtures normalize only direct messages", () => {
   assert.equal(telegramInbound({ message: { message_id: 7, text: "hi", chat: { type: "private" }, from: { id: 12 } } })?.channel, "telegram");
   assert.equal(telegramInbound({ message: { message_id: 7, text: "hi", chat: { type: "group" }, from: { id: 12 } } }), undefined);

@@ -43,6 +43,7 @@ import { SelfImprovementCoordinator, SelfImprovementJobRegistry, selfImprovement
 import { FixedWebSearch } from "./web-search.js";
 import { ownerPasswordMatches } from "./owner-password.js";
 import { RunnerModelAccessBroker, modelProxyResponseHeaders } from "./model-access.js";
+import { ChannelFleetManagement } from "./channel-fleet-management.js";
 import { NodeToolPolicy } from "./node-tool-policy.js";
 import {
   OWNER_WEB_CSS as OWNER_CONSOLE_CSS,
@@ -682,11 +683,25 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     passwordFailures.set(key, { ...state, failures: state.failures + 1 });
   }
 
+  let channelFleetManagement!: ChannelFleetManagement;
+
+  function runnerEnrolledForScheduling(runnerId: string): boolean {
+    return runnerRegistry.isEnrolled(runnerId) && !channelFleetManagement.isPendingRevocation(runnerId);
+  }
+
+  function checkChannelRunnerRevocation(runnerId: string): string | undefined {
+    if (!state.runners.has(runnerId)) return "找不到这台已登记节点；我没有执行撤销。";
+    if (!runnerRegistry.isEnrolled(runnerId)) return "这台节点已经撤销纳管；没有重复执行。";
+    const activeJobs = jobRegistry.nonTerminalCountByRunner().get(runnerId) ?? 0;
+    if (activeJobs > 0) return `这台节点还有 ${activeJobs} 个未完成任务；请等任务结束后再撤销。`;
+    return undefined;
+  }
+
   function fleetSchedulingContext() {
     return {
       runners: state.listRunners(),
       assignedJobs: jobRegistry.nonTerminalCountByRunner(),
-      isEnrolled: (runnerId: string) => runnerRegistry.isEnrolled(runnerId),
+      isEnrolled: runnerEnrolledForScheduling,
       adapterEnabled: (runnerId: string, adapter: AdapterDefinition["adapter"]) => adapterRegistry.resolve(runnerId, adapter) !== undefined,
     };
   }
@@ -695,7 +710,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     const byWorkspace = new Map<string, Set<ConversationCapability["tools"][number]>>();
     for (const runner of state.listRunners()) {
       if (
-        !runnerRegistry.isEnrolled(runner.nodeId) ||
+        !runnerEnrolledForScheduling(runner.nodeId) ||
         runner.version !== "0.2.1" ||
         !runner.online ||
         runner.status !== "online" ||
@@ -736,6 +751,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       const assignedJobs = jobRegistry.nonTerminalCountByRunner();
       const nodes = state.listRunners().map((runner) => ({
         name: runner.displayName,
+        enrolled: runnerRegistry.isEnrolled(runner.nodeId),
+        revocationPending: channelFleetManagement.isPendingRevocation(runner.nodeId),
         online: runner.online,
         status: runner.status,
         version: runner.version,
@@ -868,6 +885,46 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     );
     return result;
   }
+
+  channelFleetManagement = new ChannelFleetManagement({
+    enabled: config.channelFleetManagementEnabled === true,
+    ...(config.publicOrigin === undefined ? {} : { hubOrigin: config.publicOrigin }),
+    listRunners: () => {
+      const assignedJobs = jobRegistry.nonTerminalCountByRunner();
+      return state.listRunners().map((runner) => ({
+        runnerId: runner.nodeId,
+        name: runner.displayName,
+        online: runner.online,
+        activeJobs: Math.max(runner.activeJobs, assignedJobs.get(runner.nodeId) ?? 0),
+        enrolled: runnerRegistry.isEnrolled(runner.nodeId),
+        revocationPending: channelFleetManagement.isPendingRevocation(runner.nodeId),
+      }));
+    },
+    issueEnrollment: (channel, senderId) => mutate(async () => {
+      const runnerId = randomUUID();
+      await store.append("runner.enrollment.requested", { channel, senderId, runnerId });
+      const enrollment = runnerRegistry.issueEnrollment(Date.now(), runnerId);
+      await store.append("runner.enrollment.issued", { channel, senderId, runnerId, expiresAt: enrollment.expiresAt });
+      return enrollment;
+    }),
+    checkRevocation: checkChannelRunnerRevocation,
+    revokeRunner: (runnerId, channel, senderId) => mutate(async () => {
+      const problem = checkChannelRunnerRevocation(runnerId);
+      if (problem !== undefined) return problem;
+      await store.append("runner.revocation.requested", { channel, senderId, runnerId, confirmed: true });
+      const result = runnerRegistry.revokeDevice(runnerId);
+      if (result.outcome === "not_found") {
+        await store.append("runner.revocation.rejected", { channel, senderId, runnerId, reason: "not_found" });
+        return "找不到这台纳管节点；我没有执行撤销。";
+      }
+      if (result.outcome === "already_revoked") {
+        await store.append("runner.revocation.rejected", { channel, senderId, runnerId, reason: "already_revoked" });
+        return "这台节点已经撤销纳管；没有重复执行。";
+      }
+      await store.append("runner.revoked", { channel, senderId, runnerId });
+      return `已撤销节点 \`${runnerId}\` 的纳管凭据。它将不能再连接 Hub。`;
+    }),
+  });
 
   function ownerAuthorized(request: IncomingMessage, method: string): boolean {
     if (tokenMatches(config.ownerToken, request.headers.authorization)) return true;
@@ -1368,6 +1425,11 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const acceptance = channelRegistry.accept(inbound.channel,inbound.token,inbound.senderId,inbound.messageId,inbound.group);
         if (acceptance === "rejected") { error(response,401,"INBOUND_REJECTED","Channel is unpaired, grouped, or unauthorized"); return; }
         if (acceptance === "new") await mutate(async()=>{ await store.append("channel.inbound",{channel:inbound.channel,messageId:inbound.messageId,senderId:inbound.senderId,textDigest:jsonDigest(inbound.text)}); });
+        const directFleetReply = await channelFleetManagement.handle(inbound.channel, inbound.senderId, inbound.text, Date.now(), acceptance === "new");
+        if (directFleetReply !== undefined) {
+          json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: directFleetReply });
+          return;
+        }
         const directApprovalReply = await approveFromPrivateChannel(inbound.channel, inbound.senderId, inbound.text);
         if (directApprovalReply !== undefined) {
           json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: directApprovalReply });
@@ -1735,7 +1797,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const schedulingContext = {
           runners: state.listRunners(),
           assignedJobs: jobRegistry.nonTerminalCountByRunner(),
-          isEnrolled: (runnerId: string) => runnerRegistry.isEnrolled(runnerId),
+          isEnrolled: runnerEnrolledForScheduling,
           adapterEnabled: (runnerId: string, adapter: AdapterDefinition["adapter"]) => adapterRegistry.resolve(runnerId, adapter) !== undefined,
         };
         const selection = requestInput.target.mode === "auto"
@@ -1747,6 +1809,10 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         }
         const runnerId = requestInput.target.mode === "explicit" ? requestInput.target.runnerId : selection?.runnerId;
         if (runnerId === undefined) throw new Error("Fleet selection did not produce a Runner");
+        if (channelFleetManagement.isPendingRevocation(runnerId)) {
+          error(response, 409, "RUNNER_REVOCATION_PENDING", "Runner enrollment is pending revocation");
+          return;
+        }
         const adapter = requiredAdapter(requestInput.input.tool);
         if (adapter !== undefined && adapterRegistry.resolve(runnerId, adapter) === undefined) {
           error(response, 409, "RUNNER_ADAPTER_NOT_ENABLED", "Select an explicitly enabled compatible Runner adapter");
@@ -1786,7 +1852,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
             {
               runners: state.listRunners(),
               assignedJobs: jobRegistry.nonTerminalCountByRunner(),
-              isEnrolled: (runnerId) => runnerRegistry.isEnrolled(runnerId),
+              isEnrolled: runnerEnrolledForScheduling,
               adapterEnabled: (runnerId, adapterName) => adapterRegistry.resolve(runnerId, adapterName) !== undefined,
             },
           ),
@@ -2276,7 +2342,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       }
 
       if (method === "GET" && url.pathname === "/v1/runners") {
-        json(response, 200, { runners: state.listRunners() });
+        json(response, 200, { runners: state.listRunners().map((runner) => ({ ...runner, enrolled: runnerRegistry.isEnrolled(runner.nodeId) })) });
         return;
       }
 

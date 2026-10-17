@@ -79,6 +79,8 @@ curl -fsS http://127.0.0.1:4310/health
 docker compose -f deploy/hub/compose.yml ps
 ```
 
+IM Runner 纳管命令默认关闭。确认 Gateway 仅允许配对的 Owner 私聊后，才在 root-only 的 `hub.env` 中设置 `FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE=1` 并仅重建/替换 Hub。支持 `/runner list`、`/runner add`、两步确认的 `/runner revoke <runnerId>` 和 `/runner cancel`；入网凭据是十分钟一次性 token，`fridayctl` 会通过 `--enrollment-file` 安全交接。撤销前后都检查未完成任务，不提供通用 API、SSH 或 Shell 代理。
+
 `FRIDAY_PUBLIC_ORIGIN` 必须与浏览器实际 Origin 完全一致，否则所有带副作用的 Basic Auth Web 请求会被 Origin/CSRF 校验拒绝。
 
 ## 4. 模型与凭据

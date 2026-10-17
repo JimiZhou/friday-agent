@@ -159,7 +159,14 @@ export class FridayState {
 
     // Channel ingress is intentionally audit-only in M2. It cannot mutate an
     // Owner task, approval, Runner, or long-term preference by itself.
-    if (event.type === "channel.inbound") return;
+    if (
+      event.type === "channel.inbound" ||
+      event.type === "runner.enrollment.requested" ||
+      event.type === "runner.enrollment.issued" ||
+      event.type === "runner.revocation.requested" ||
+      event.type === "runner.revocation.rejected" ||
+      event.type === "runner.revoked"
+    ) return;
 
     throw invalidEvent(event, "unsupported event type");
   }
