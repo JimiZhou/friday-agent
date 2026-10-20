@@ -36,6 +36,7 @@ import { RunnerWorkspaceRegistry } from "./workspace-registry.js";
 import { requestSandboxExecution } from "./sandbox-client.js";
 import { invokeNodeTool, verifyNodeToolAuthorization } from "./node-tool-client.js";
 import { parseRemoteAgentOutput } from "./remote-agent-output.js";
+import { collectSystemInfo } from "./system-info.js";
 
 const execFile = promisify(execFileCallback);
 const MAX_AGENT_ARGUMENT_BYTES = 4 * 1024;
@@ -136,6 +137,7 @@ export class FridayRunner {
         capabilities: [...capabilities.capabilities],
         workspaces: [...capabilities.workspaces],
         shellExecution: false,
+        systemInfo: await collectSystemInfo(this.#config.stateDir),
       },
     } as RunnerEnvelopeV1;
 

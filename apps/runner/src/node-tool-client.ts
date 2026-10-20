@@ -52,7 +52,7 @@ async function systemSnapshot(): Promise<JsonValue> {
     command("uname", ["-a"]),
     command("uptime", ["-p"]),
     command("free", ["-b"]),
-    command("df", ["-B1", "-x", "tmpfs", "-x", "devtmpfs", "--output=source,fstype,size,used,avail,pcent,target"]),
+    command("df", ["-l", "-B1", "-x", "tmpfs", "-x", "devtmpfs", "--output=source,fstype,size,used,avail,pcent,target"]),
     safeFileRead("/proc/loadavg", 4_096),
     safeFileRead("/etc/os-release", 16_384),
   ]);

@@ -16,11 +16,11 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
     <aside class="sidebar">
       <div class="brand"><span class="reactor" aria-hidden="true"></span><span>FRIDAY AGENT</span></div>
       <nav class="primary-nav" aria-label="主导航">
-        <button class="nav-item is-active" type="button" data-view="chat" aria-current="page"><span aria-hidden="true">◉</span><b>对话</b></button>
+        <button class="nav-item is-active" type="button" data-view="devices" aria-current="page"><span aria-hidden="true">⌁</span><b>设备管理</b></button>
+        <button class="nav-item" type="button" data-view="chat"><span aria-hidden="true">◉</span><b>对话</b></button>
         <details class="advanced-menu">
           <summary class="nav-item advanced-summary"><span aria-hidden="true">≡</span><b>管理</b></summary>
           <div class="advanced-links">
-            <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
             <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b><em id="task-count" hidden>0</em></button>
             <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b><em id="clearance-count" hidden>0</em></button>
           </div>
@@ -38,7 +38,7 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
     </header>
 
     <main id="main-content" class="workspace" tabindex="-1">
-      <section id="view-chat" class="view view-chat" data-view-panel="chat">
+      <section id="view-chat" class="view view-chat" data-view-panel="chat" hidden>
         <header class="view-header chat-header">
           <div>
             <p class="eyebrow">PERSONAL OPERATING INTELLIGENCE</p>
@@ -100,16 +100,53 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
         </form>
       </section>
 
-      <section id="view-devices" class="view" data-view-panel="devices" hidden>
+      <section id="view-devices" class="view" data-view-panel="devices">
         <header class="view-header">
-          <div><p class="eyebrow">PRIVATE FLEET</p><h1>设备</h1></div>
-          <button id="refresh-devices" class="button button-quiet" type="button">刷新状态</button>
+          <div><p class="eyebrow">PRIVATE FLEET</p><h1>设备管理</h1></div>
+          <div class="header-actions">
+            <button id="refresh-devices" class="button button-quiet" type="button">刷新状态</button>
+            <button id="add-device" class="button button-primary" type="button" aria-expanded="false" aria-controls="device-enrollment">新增纳管</button>
+          </div>
         </header>
         <div class="section-intro">
-          <p>Hub 只调度已登记且在线的节点。推荐通过 Tailscale 组网；模型看不到 SSH 密钥。</p>
+          <p>子节点主动连接 Hub 接收指令并回传结果；内网设备无需开放入站端口。Hub 可向在线节点下发任务。</p>
           <span id="fleet-summary">正在读取设备…</span>
         </div>
+        <section id="device-enrollment" class="enrollment-panel" aria-labelledby="enrollment-title" hidden>
+          <h2 id="enrollment-title">新增纳管设备</h2>
+          <p>默认在子节点本机执行加入命令；也可从已配置免密 SSH 的运维机远程安装。子节点只需能主动访问 Hub。</p>
+          <form id="enrollment-form" class="enrollment-fields">
+            <label for="enrollment-mode">安装方式<select id="enrollment-mode"><option value="local">在子节点本机执行（单向访问 Hub）</option><option value="ssh">运维机免密 SSH 安装</option></select></label>
+            <label id="enrollment-target-label" for="enrollment-target" hidden>SSH 目标（user@host）<input id="enrollment-target" autocomplete="off" placeholder="ubuntu@192.168.1.20"></label>
+            <label for="enrollment-name">设备名称<input id="enrollment-name" required maxlength="128" placeholder="内网服务器"></label>
+            <label for="enrollment-user">设备运行用户<input id="enrollment-user" required autocomplete="off" placeholder="ubuntu"></label>
+            <label for="enrollment-hub">子节点访问的 Hub 地址<input id="enrollment-hub" type="url" required></label>
+            <div class="header-actions"><button id="issue-enrollment" class="button button-secondary" type="submit">生成一次性纳管命令</button><button id="close-enrollment" class="button button-quiet" type="button">关闭并清除凭据</button></div>
+          </form>
+          <p id="enrollment-status" role="status"></p>
+          <div id="enrollment-result" hidden>
+            <p>命令包含十分钟有效的一次性凭据，请勿转发。复制后直接在子节点执行，无需手动创建凭据文件；关闭或刷新页面后不会恢复。</p>
+            <label for="enrollment-json">一次性凭据 JSON</label><textarea id="enrollment-json" rows="7" readonly spellcheck="false"></textarea>
+            <button id="copy-enrollment-json" class="button button-quiet" type="button">复制凭据 JSON</button>
+            <p id="enrollment-prerequisites">Linux、Node.js 22.19+、curl、sha256sum；自动从 Hub 下载，无需项目源码或 Owner Token。支持系统服务、用户服务及 Docker 常驻。</p>
+            <label for="enrollment-command">复制后在所选节点终端直接执行</label><textarea id="enrollment-command" rows="8" readonly spellcheck="false"></textarea>
+            <button id="copy-enrollment-command" class="button button-quiet" type="button">复制纳管命令</button>
+          </div>
+        </section>
         <div id="device-list" class="device-list" aria-live="polite"></div>
+        <section class="enrollment-panel" aria-labelledby="channel-title">
+          <h2 id="channel-title">IM 消息渠道</h2>
+          <p>配置后在已配对私聊发送 /menu 打开 Friday 操作菜单。目前支持文本收发；每个渠道仅允许指定的 Owner 私聊。</p>
+          <div id="channel-list" aria-live="polite"></div>
+          <form id="channel-form" class="enrollment-fields">
+            <label for="channel-type">渠道<select id="channel-type"><option value="telegram">Telegram</option><option value="feishu">飞书</option><option value="wecom">企业微信智能机器人</option><option value="qq">QQ 官方机器人</option><option value="cmcc">中国移动新消息</option></select></label>
+            <label for="channel-sender">Owner 发送者 ID<input id="channel-sender" required maxlength="256" autocomplete="off" aria-describedby="channel-help"></label>
+            <div id="channel-fields" class="enrollment-fields"></div>
+            <p id="channel-help"></p>
+            <div class="header-actions"><button id="save-channel" class="button button-secondary" type="submit">保存并连接</button><button id="disable-channel" class="button button-quiet" type="button">停用所选渠道</button></div>
+          </form>
+          <p id="channel-feedback" role="status"></p>
+        </section>
         <section class="integration-section" aria-labelledby="wechat-title">
           <div>
             <p class="eyebrow">CHANNEL</p>
@@ -165,11 +202,11 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
     </main>
 
     <nav class="mobile-nav" aria-label="移动端主导航">
-      <button class="nav-item is-active" type="button" data-view="chat"><span aria-hidden="true">◉</span><b>对话</b></button>
+      <button class="nav-item is-active" type="button" data-view="devices" aria-current="page"><span aria-hidden="true">⌁</span><b>设备管理</b></button>
+      <button class="nav-item" type="button" data-view="chat"><span aria-hidden="true">◉</span><b>对话</b></button>
       <details class="advanced-menu mobile-advanced">
         <summary class="nav-item advanced-summary"><span aria-hidden="true">≡</span><b>管理</b></summary>
         <div class="advanced-sheet">
-          <button class="nav-item" type="button" data-view="devices"><span aria-hidden="true">⌁</span><b>设备</b></button>
           <button class="nav-item" type="button" data-view="tasks"><span aria-hidden="true">↗</span><b>任务</b></button>
           <button class="nav-item" type="button" data-view="clearance"><span aria-hidden="true">◇</span><b>授权</b></button>
         </div>
@@ -183,6 +220,16 @@ export const OWNER_WEB_HTML = String.raw`<!doctype html>
 </html>`;
 
 export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsive;
+
+@layer components {
+  .enrollment-panel { display: grid; gap: 1rem; padding: 1.5rem; margin-bottom: 1.5rem; background: var(--surface); border: 1px solid var(--line); }
+  .enrollment-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 1rem; }
+  .enrollment-fields label { display: grid; gap: .4rem; }
+  .enrollment-panel input, .enrollment-panel textarea { width: 100%; min-width: 0; padding: .65rem; border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink); }
+  .enrollment-panel textarea { display: block; margin: .5rem 0; font-family: monospace; font-size: .875rem; }
+  .enrollment-panel p, .device-meta { overflow-wrap: anywhere; }
+  .device-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+}
 
 @layer reset {
   *, *::before, *::after { box-sizing: border-box; }
@@ -439,7 +486,11 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
   .send-button { min-width: 6.25rem; }
 
   .device-list, .ledger-list, .approval-list { display: grid; border-top: 1px solid var(--line); }
-  .device-row { display: grid; gap: var(--space-4); padding: var(--space-6) 0; border-bottom: 1px solid var(--line); }
+  .device-table-wrap { overflow-x: auto; }
+  .device-table { width: 100%; min-width: 48rem; border-collapse: collapse; font-size: var(--text-sm); }
+  .device-table th, .device-table td { padding: 1rem .75rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  .device-table th { background: var(--paper-deep); white-space: nowrap; }
+  .device-table caption { padding: .75rem; text-align: left; color: var(--ink-soft); }
   .device-identity { display: flex; align-items: center; gap: var(--space-3); }
   .device-identity h2 { font-family: var(--font-body); font-size: var(--text-base); letter-spacing: 0; }
   .device-identity p, .device-meta { color: var(--ink-soft); font-size: var(--text-sm); }
@@ -505,7 +556,6 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
 @layer responsive {
   @media (min-width: 40rem) {
     .inline-form { grid-template-columns: minmax(0, 1fr) auto; }
-    .device-row { grid-template-columns: minmax(15rem, .8fr) 1.2fr; align-items: center; }
     .ledger-row, .approval-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
     .approval-context { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
@@ -565,7 +615,7 @@ export const OWNER_WEB_CSS = String.raw`@layer reset, base, components, responsi
 export const OWNER_WEB_SCRIPT = String.raw`const byId = (id) => document.getElementById(id);
 const all = (selector) => Array.from(document.querySelectorAll(selector));
 const appState = {
-  jobs: [], runners: [], improvements: [], nodeToolApprovals: [], conversationId: "main", activeView: "chat",
+  jobs: [], runners: [], improvements: [], nodeToolApprovals: [], conversationId: "main", activeView: "devices",
   conversationTurns: [], memories: [],
   pairingId: null, pairingTimer: null, recorder: null, voiceChunks: [],
   pendingMedia: [], uploadInFlight: false, sending: false,
@@ -937,9 +987,9 @@ async function boot() {
     const status = await api("/v2/auth/status");
     if (!status.authenticated) throw new Error("Basic Auth 未通过");
     const requestedView = location.hash.slice(1);
-    activateView(["chat", "devices", "tasks", "clearance"].includes(requestedView) ? requestedView : "chat");
+    activateView(["chat", "devices", "tasks", "clearance"].includes(requestedView) ? requestedView : "devices");
     document.querySelector(".context-drawer").open = matchMedia("(min-width: 56rem)").matches;
-    await Promise.allSettled([loadConversation(), loadJobs(), loadDevices(), loadClearance(), loadMemory(), loadWechatStatus()]);
+    await Promise.allSettled([loadConversation(), loadJobs(), loadDevices(), loadClearance(), loadMemory(), loadWechatStatus(), loadChannels()]);
     startEventStream();
     setPresence("ready", "等你开口");
   } catch (error) {
@@ -1546,27 +1596,208 @@ function renderDevices() {
   byId("fleet-summary").textContent = "在线 " + online + " / " + appState.runners.length;
   byId("fleet-ribbon").textContent = appState.runners.length ? online + " / " + appState.runners.length + " 节点在线" : "尚未纳管节点";
   if (!appState.runners.length) {
-    host.append(emptyAction("还没有纳管节点", "告诉 Friday 设备类型和用途，它会给出最短的 Runner 接入路径。", "让 Friday 帮我纳管", "帮我纳管一台设备。先问我必要信息，再给出最短、安全的 Runner 部署步骤。"));
+    host.append(emptyRow("还没有纳管节点。点击「新增纳管」生成接入命令。"));
     return;
   }
+  const wrapper = element("div", "device-table-wrap");
+  wrapper.tabIndex = 0;
+  wrapper.setAttribute("role", "region");
+  wrapper.setAttribute("aria-label", "纳管设备列表，可横向滚动");
+  const table = element("table", "device-table");
+  table.append(element("caption", "", "硬件与系统信息由节点启动时上报；存储为 Runner 数据所在卷。"));
+  const head = document.createElement("thead");
+  const heading = document.createElement("tr");
+  ["设备与状态", "系统与能力", "CPU / 内存", "所在卷可用 / 总量", "操作"].forEach((label) => { const cell = element("th", "", label); cell.scope = "col"; heading.append(cell); });
+  head.append(heading); table.append(head);
+  const body = document.createElement("tbody");
+  const bytes = (value) => value >= 1024 ** 4 ? (value / 1024 ** 4).toFixed(1) + " TiB" : (value / 1024 ** 3).toFixed(1) + " GiB";
   appState.runners.forEach((runner) => {
-    const row = element("article", "device-row");
+    const row = document.createElement("tr");
+    const identityCell = document.createElement("td");
     const identity = element("div", "device-identity");
     const dot = element("span", "status-dot" + (runner.online ? "" : " status-dot-danger"));
     const copy = element("div", "");
-    copy.append(element("h2", "", runner.displayName || "未命名节点"), element("p", "", runner.online ? "在线 · 最近心跳 " + formatTime(runner.lastSeenAt) : "离线 · 最后心跳 " + formatTime(runner.lastSeenAt)));
+    copy.append(element("h2", "", runner.displayName || "未命名节点"), element("p", "", runner.enrolled === false ? "已撤销纳管" : runner.online ? "在线 · 最近心跳 " + formatTime(runner.lastSeenAt) : "离线 · 最后心跳 " + formatTime(runner.lastSeenAt)));
     identity.append(dot, copy);
-    const meta = element("div", "device-meta");
-    meta.append(element("span", "", "Runner " + (runner.version || "未知版本") + " · 当前任务 " + (runner.activeJobs || 0)));
-    const chips = element("div", "chip-row");
-    (runner.workspaces || []).forEach((workspace) => chips.append(element("span", "chip", workspace)));
-    (runner.capabilities || []).forEach((capability) => chips.append(element("span", "chip", capability)));
-    meta.append(chips);
-    row.append(identity, meta);
-    host.append(row);
+    identityCell.append(identity);
+    const info = runner.systemInfo;
+    const meta = document.createElement("td");
+    meta.append(element("p", "", info ? info.osName + " · " + info.arch + (info.osScope === "runner" ? "（运行环境）" : "") : "系统信息待上报"));
+    meta.append(element("p", "device-meta", (runner.capabilities || []).includes("sandbox") ? "已配置执行沙箱" : "基础信息上报 · 执行沙箱未配置"));
+    const hardware = document.createElement("td");
+    hardware.append(element("p", "", info ? info.cpuModel : "硬件信息待上报"));
+    if (info) hardware.append(element("p", "device-meta", info.cpuThreads + " 线程 · " + bytes(info.memoryBytes) + " 内存"), element("p", "device-meta", "采集于 " + formatTime(info.observedAt)));
+    const storage = element("td", "", info && info.storageTotalBytes !== undefined ? (info.storageAvailableBytes === undefined ? "未知" : bytes(info.storageAvailableBytes)) + " / " + bytes(info.storageTotalBytes) : "待上报");
+    const actionCell = document.createElement("td");
+    actionCell.append(element("p", "device-meta", "当前任务 " + (runner.activeJobs || 0)));
+    const actions = element("div", "device-actions");
+    const operate = element("button", "button button-secondary", "下发任务");
+    operate.type = "button";
+    operate.disabled = !runner.online || runner.enrolled === false || !(runner.capabilities || []).includes("sandbox") || !(runner.workspaces || []).length;
+    if (operate.disabled) operate.title = "节点需在线、配置执行沙箱并注册工作区后才能下发任务";
+    operate.addEventListener("click", () => {
+      activateView("chat");
+      useStarter("在设备「" + runner.displayName + "」上执行任务：");
+    });
+    const revoke = element("button", "button button-quiet", "撤销纳管");
+    revoke.type = "button";
+    revoke.disabled = runner.enrolled === false;
+    revoke.addEventListener("click", async () => {
+      if (!confirm("撤销「" + runner.displayName + "」的纳管？撤销后该设备将无法接收任务，重新接入需要新凭据。")) return;
+      revoke.disabled = true;
+      try {
+        await post("/v1/runners/" + encodeURIComponent(runner.nodeId) + "/revoke", {});
+        toast("已撤销纳管");
+        await loadDevices();
+      } catch (error) { toast("撤销失败：" + error.message); revoke.disabled = false; }
+    });
+    actions.append(operate, revoke);
+    actionCell.append(actions);
+    row.append(identityCell, meta, hardware, storage, actionCell);
+    body.append(row);
   });
+  table.append(body); wrapper.append(table); host.append(wrapper);
 }
-byId("refresh-devices").addEventListener("click", () => Promise.all([loadDevices(), loadWechatStatus()]));
+byId("refresh-devices").addEventListener("click", () => Promise.all([loadDevices(), loadWechatStatus(), loadChannels()]));
+
+const channelDefinitions = {
+  telegram: { name: "Telegram", fields: [["botToken", "Bot Token"]], help: "填写 BotFather 的 Bot Token 和你的数字用户 ID。" },
+  feishu: { name: "飞书", fields: [["appId", "App ID"], ["appSecret", "App Secret"]], help: "企业自建应用需开启机器人、长连接事件订阅 im.message.receive_v1 以及消息接收和发送权限；Owner ID 填 open_id。" },
+  wecom: { name: "企业微信", fields: [["botId", "Bot ID"], ["secret", "Secret"]], help: "使用支持 API 长连接的智能机器人（非群 Webhook）。Owner ID 填企业微信 userid，无需公网回调。" },
+  qq: { name: "QQ 机器人", fields: [["appId", "App ID"], ["appSecret", "App Secret"]], help: "QQ 官方机器人需开启单聊事件 C2C_MESSAGE_CREATE 并具备对应权限。Owner ID 填 user_openid（不是 QQ 号码）。发送受平台主动消息额度与回复窗口限制。" },
+  cmcc: { name: "中国移动新消息", fields: [["apiKey", "新消息 Channel API Key"]], help: "Owner ID 填平台消息中的 from/phone（通常为手机号码）。密钥只保存在 Gateway 私密配置中。" },
+};
+let savedChannelCredentials = {};
+function renderChannelFields() {
+  const definition = channelDefinitions[byId("channel-type").value];
+  byId("channel-fields").replaceChildren();
+  definition.fields.forEach(([name, title]) => {
+    const label = element("label", "", title);
+    const input = element("input", "");
+    input.id = "channel-credential-" + name;
+    input.name = name;
+    input.type = name === "appId" || name === "botId" ? "text" : "password";
+    input.autocomplete = "off";
+    input.required = !savedChannelCredentials[byId("channel-type").value];
+    if (!input.required) input.placeholder = "已保存，留空复用";
+    input.maxLength = 4096;
+    label.append(input);
+    byId("channel-fields").append(label);
+  });
+  byId("channel-sender").value = "";
+  byId("channel-help").textContent = definition.help;
+  byId("channel-feedback").textContent = "";
+}
+async function loadChannels() {
+  try {
+    const result = await api("/v4/channels");
+    byId("channel-list").replaceChildren();
+    if (!result.configured) { byId("channel-list").append(emptyRow("Channel Gateway 尚未配置。")); return; }
+    (result.channels || []).forEach((item) => {
+      savedChannelCredentials[item.channel] = item.hasSavedCredentials === true;
+      byId("channel-list").append(element("p", "", (channelDefinitions[item.channel]?.name || item.channel) + " · " + (item.connected ? "已连接" : item.configured ? "连接中 / 重试中" : "未配置")));
+    });
+    const selected = byId("channel-type").value;
+    byId("channel-fields").querySelectorAll("input").forEach((input) => {
+      input.required = !savedChannelCredentials[selected];
+      input.placeholder = input.required ? "" : "已保存，留空复用";
+    });
+  } catch { byId("channel-list").replaceChildren(emptyRow("渠道状态读取失败，请检查 Gateway。")); }
+}
+byId("channel-type").addEventListener("change", renderChannelFields);
+renderChannelFields();
+byId("channel-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const channel = byId("channel-type").value;
+  const credentials = {};
+  channelDefinitions[channel].fields.forEach(([name]) => { credentials[name] = byId("channel-credential-" + name).value.trim(); });
+  if (Object.values(credentials).every((value) => value === "")) Object.keys(credentials).forEach((name) => { delete credentials[name]; });
+  const button = byId("save-channel");
+  button.disabled = true;
+  byId("channel-feedback").textContent = "正在保存并连接…";
+  try {
+    await post("/v4/channels/" + channel + "/configure", { senderId: byId("channel-sender").value.trim(), credentials });
+    channelDefinitions[channel].fields.forEach(([name]) => { byId("channel-credential-" + name).value = ""; });
+    byId("channel-feedback").textContent = "已保存，正在连接。连接成功后可在私聊发送 /menu。";
+    await loadChannels();
+  } catch (error) { byId("channel-feedback").textContent = "配置失败：" + error.message; }
+  finally { button.disabled = false; }
+});
+byId("disable-channel").addEventListener("click", async () => {
+  const channel = byId("channel-type").value;
+  if (!confirm("停用「" + channelDefinitions[channel].name + "」？该渠道将停止收发消息。")) return;
+  const button = byId("disable-channel");
+  button.disabled = true;
+  try { await post("/v4/channels/" + channel + "/disable", {}); byId("channel-feedback").textContent = "已停用该渠道。"; await loadChannels(); }
+  catch (error) { byId("channel-feedback").textContent = "停用失败：" + error.message; }
+  finally { button.disabled = false; }
+});
+
+let enrollmentExpiryTimer;
+function clearEnrollment() {
+  clearTimeout(enrollmentExpiryTimer);
+  byId("enrollment-json").value = "";
+  byId("enrollment-command").value = "";
+  byId("enrollment-result").hidden = true;
+}
+byId("enrollment-hub").value = location.origin;
+byId("enrollment-mode").addEventListener("change", () => {
+  clearEnrollment();
+  const remote = byId("enrollment-mode").value === "ssh";
+  byId("enrollment-target-label").hidden = !remote;
+  byId("enrollment-target").required = remote;
+  byId("enrollment-prerequisites").textContent = remote ? "运维机需已有本项目及构建好的 fridayctl，并设置 FRIDAY_OWNER_TOKEN 用于确认节点上线。" : "Linux、Node.js 22.19+、curl、sha256sum；只需子节点主动访问 Hub。无需项目源码、Owner Token 或 SSH。无免密 sudo 时使用用户服务（需 linger）或 Docker。";
+});
+byId("add-device").addEventListener("click", () => {
+  byId("device-enrollment").hidden = false;
+  byId("add-device").setAttribute("aria-expanded", "true");
+  byId("enrollment-mode").focus();
+});
+byId("close-enrollment").addEventListener("click", () => {
+  clearEnrollment();
+  byId("device-enrollment").hidden = true;
+  byId("add-device").setAttribute("aria-expanded", "false");
+  byId("enrollment-status").textContent = "";
+  byId("add-device").focus();
+});
+function shellQuote(value) { return "'" + value.replaceAll("'", "'\"'\"'") + "'"; }
+byId("enrollment-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const status = byId("enrollment-status");
+  const target = byId("enrollment-target").value.trim();
+  const name = byId("enrollment-name").value.trim();
+  const user = byId("enrollment-user").value.trim();
+  const remote = byId("enrollment-mode").value === "ssh";
+  let hub;
+  try { hub = new URL(byId("enrollment-hub").value); } catch { status.textContent = "请输入有效的 Hub 地址。"; return; }
+  if ((remote && !/^[a-z_][a-z0-9_-]*@[a-zA-Z0-9][a-zA-Z0-9.:-]*$/.test(target)) || !/^[a-z_][a-z0-9_-]*$/.test(user) || !name || hub.username || hub.password || !["https:", "http:"].includes(hub.protocol)) {
+    status.textContent = "请检查 SSH 目标、运行用户、设备名称和 Hub 地址。"; return;
+  }
+  const button = byId("issue-enrollment");
+  button.disabled = true;
+  status.textContent = "正在签发一次性凭据…";
+  clearEnrollment();
+  try {
+    const enrollment = await post(remote ? "/v1/runners/enrollment-tokens" : "/v1/runners/enrollment-command", remote ? {} : { hubUrl: hub.origin, runnerName: name, serviceUser: user });
+    const credential = { runnerId: enrollment.runnerId, enrollmentToken: enrollment.enrollmentToken, expiresAt: enrollment.expiresAt };
+    byId("enrollment-json").value = JSON.stringify(credential, null, 2);
+    byId("enrollment-command").value = remote ? "umask 077\nprintf '%s\\n' " + shellQuote(JSON.stringify(credential)) + " > enrollment.json\n" +
+      "npm run fridayctl -- runner " + (remote ? "bootstrap " + shellQuote(target) : "join") +
+      " --hub-url " + shellQuote(hub.origin) + (remote ? " --control-url " + shellQuote(location.origin) : "") +
+      " --runner-name " + shellQuote(name) + " --service-user " + shellQuote(user) + " --enrollment-file enrollment.json" : enrollment.command;
+    byId("enrollment-result").hidden = false;
+    status.textContent = "节点 " + enrollment.runnerId + " · 到期时间 " + formatTime(enrollment.expiresAt);
+    enrollmentExpiryTimer = setTimeout(() => { clearEnrollment(); status.textContent = "凭据已过期，请重新生成。"; }, Math.max(0, Date.parse(enrollment.expiresAt) - Date.now()));
+  } catch (error) { status.textContent = "签发失败：" + error.message; }
+  finally { button.disabled = false; }
+});
+[["copy-enrollment-json", "enrollment-json"], ["copy-enrollment-command", "enrollment-command"]].forEach(([buttonId, fieldId]) => {
+  byId(buttonId).addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(byId(fieldId).value); toast("已复制"); }
+    catch { byId(fieldId).focus(); byId(fieldId).select(); toast("请手动复制选中的内容"); }
+  });
+});
+addEventListener("pagehide", clearEnrollment);
 
 async function loadJobs() {
   try {

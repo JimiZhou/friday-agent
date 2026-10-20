@@ -14,5 +14,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node --enable-source-maps dist/index.js"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "1.76.0",
+    "@wecom/aibot-node-sdk": "1.0.7",
+    "ws": "8.22.0"
   }
 }

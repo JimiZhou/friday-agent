@@ -79,6 +79,8 @@ curl -fsS http://127.0.0.1:4310/health
 docker compose -f deploy/hub/compose.yml ps
 ```
 
+IM Runner 纳管命令默认关闭。确认 Gateway 仅允许配对的 Owner 私聊后，才在 root-only 的 `hub.env` 中设置 `FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE=1` 和默认 SSH 目标（例如 `FRIDAY_RUNNER_SSH_TARGET=hub-ssh`），并仅重建/替换 Hub。支持 `/runner list`、`/runner add [设备名] [服务用户] [SSH目标]`、两步确认的 `/runner revoke <runnerId>` 和 `/runner cancel`。`/runner add` 直接返回一条粘贴到目标节点的单行命令，内部携带十分钟一次性凭据；不需要 `fridayctl`、源码或 Owner Token。目标节点必须能免密 SSH 到该 Hub 目标并已信任其 `known_hosts`。撤销前后都检查未完成任务，不提供通用 API、SSH 或 Shell 代理。
+
 `FRIDAY_PUBLIC_ORIGIN` 必须与浏览器实际 Origin 完全一致，否则所有带副作用的 Basic Auth Web 请求会被 Origin/CSRF 校验拒绝。
 
 ## 4. 模型与凭据
@@ -145,7 +147,9 @@ unset FRIDAY_TELEGRAM_BOT_TOKEN FRIDAY_TELEGRAM_OWNER_ID
 
 ## 6. 纳管轻量 Runner
 
-运行 `fridayctl` 的管理机需要 Node.js `>=22.19.0`：
+推荐直接在已配对的 Owner 私聊发送 `/runner add`，把返回代码块中的单行命令粘贴到目标节点执行。Hub 的 `hub.env` 需设置 `FRIDAY_RUNNER_SSH_TARGET`；目标节点需能免密 SSH 到该 Hub 目标，且 `known_hosts` 已信任 Hub 主机密钥。此路径不需要下载或构建 `fridayctl`。
+
+如需在运维机统一执行预检、升级或 Sandbox 安装，才从本项目构建 `fridayctl`；运行它的管理机需要 Node.js `>=22.19.0`：
 
 ```sh
 npm ci --ignore-scripts
@@ -194,7 +198,7 @@ npm run fridayctl -- runner sandbox install node-user@managed-node.example-tailn
 固定版本：
 
 - `@openai/codex@0.145.0`
-- `@earendil-works/pi-coding-agent@0.84.1`
+- `@earendil-works/pi-coding-agent@1.3.0`
 - `@anthropic-ai/claude-code@2.1.227`
 
 成功结果包含 Sandbox release ID 和 Agent 镜像内容 ID。`friday-sandboxd` 是唯一能调用 Docker 的组件；Runner 没有 Docker socket、Root、SSH Agent 或长期模型 Key。Job 容器使用 `--network none`、非 root、只读根、无 capabilities，只挂载当前 Worktree 和模型 relay socket。旧 diagnostic fixture 已从发布树和运行协议移除；升级时必须清理运行历史，不迁移旧 Job。

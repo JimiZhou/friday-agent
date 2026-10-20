@@ -8,7 +8,7 @@ COPY agent/package.json agent/package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
     && npm cache clean --force \
     && test "$(codex --version)" = "codex-cli 0.145.0" \
-    && pi --version | grep -Eq '(^|[^0-9])0\.84\.1([^0-9]|$)' \
+    && pi --version | grep -Eq '(^|[^0-9])1\.3\.0([^0-9]|$)' \
     && claude --version | grep -Eq '(^|[^0-9])2\.1\.227([^0-9]|$)'
 
 COPY apps/sandboxd/dist/agent-wrapper.js /usr/local/lib/friday-agent/agent-wrapper.js

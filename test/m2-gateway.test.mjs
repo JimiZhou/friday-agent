@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
+import { execFile as callbackExecFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { createFridayServer } from "../apps/fridayd/dist/server.js";
+import { createRunnerRelease } from "../apps/fridayctl/dist/bootstrap.js";
 import { acknowledgeChannelNotification, deliverIlinkNotification, loadIlinkConfig, pollIlinkOnce, pullChannelNotification, sendIlinkText, sendTelegramText, startIlinkControlServer, telegramInbound, wechatIlinkInbound } from "../apps/channel-gateway/dist/index.js";
+
+const execFile = promisify(callbackExecFile);
 
 test("M2 Hub accepts only paired channel ingress and durable replay rejection", async (t) => {
   const stateDir=await mkdtemp(join(tmpdir(),"m2-hub-"));t.after(()=>rm(stateDir,{recursive:true,force:true}));
@@ -21,6 +26,56 @@ test("M2 Hub accepts only paired channel ingress and durable replay rejection", 
   const delivery=await fetch(`${base}/v2/channels/telegram/outbox`,{headers:{authorization:`Bearer ${token}`}});assert.equal(delivery.status,200);const deliveryBody=await delivery.json();assert.equal(deliveryBody.notification.text,"任务已完成。");
   const badAck=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:randomUUID()})});assert.equal(badAck.status,409);
   const ack=await fetch(`${base}/v2/channels/telegram/outbox/${deliveryBody.notification.notificationId}/ack`,{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json"},body:JSON.stringify({leaseId:deliveryBody.notification.leaseId})});assert.equal(ack.status,200);assert.equal((await ack.json()).delivered,true);
+});
+
+test("paired IM Runner commands issue one executable install command once", async (t) => {
+  const stateDir = await mkdtemp(join(tmpdir(), "m2-fleet-im-"));
+  t.after(() => rm(stateDir, { recursive: true, force: true }));
+  const distribution = await mkdtemp(join(tmpdir(), "m2-fleet-im-distribution-"));
+  t.after(() => rm(distribution, { recursive: true, force: true }));
+  await createRunnerRelease(process.cwd(), distribution);
+  const ownerToken = "m2-fleet-im-owner-token-long-enough";
+  const server = await createFridayServer({ host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, maxBodyBytes: 1_048_576, channelFleetManagementEnabled: true, runnerSshTarget: "hub-ssh" }, { runnerDistributionDirectory: distribution });
+  const address = await server.start();
+  t.after(() => server.stop());
+  const base = `http://${address.host}:${address.port}`;
+  const owner = { authorization: `Bearer ${ownerToken}`, "content-type": "application/json" };
+  const rotate = await fetch(`${base}/v2/channels/rotate`, { method: "POST", headers: owner, body: JSON.stringify({ channel: "telegram" }) });
+  const { token } = await rotate.json();
+  await fetch(`${base}/v2/channels/pair`, { method: "POST", headers: owner, body: JSON.stringify({ channel: "telegram", senderId: "owner" }) });
+
+  let issued = 0;
+  const issuedTokens = [];
+  const issueEnrollment = server.runnerRegistry.issueEnrollment.bind(server.runnerRegistry);
+  server.runnerRegistry.issueEnrollment = (...args) => { issued += 1; const enrollment = issueEnrollment(...args); issuedTokens.push(enrollment.enrollmentToken); return enrollment; };
+  const inbound = { channel: "telegram", token, senderId: "owner", messageId: randomUUID(), group: false, text: `/runner add build-node ${userInfo().username}` };
+  const first = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inbound) });
+  const firstBody = await first.json();
+  assert.equal(first.status, 202);
+  assert.match(firstBody.reply, /一次性纳管命令/);
+  const command = firstBody.reply.match(/```sh\n([^\n]+)\n```/)?.[1];
+  assert.equal(typeof command, "string");
+  assert.equal(issuedTokens.length, 1);
+  assert.equal(command.includes(issuedTokens[0]), true);
+  assert.equal(firstBody.reply.replace(command, "").includes(issuedTokens[0]), false);
+  assert.doesNotMatch(command, /fridayctl|npm run|FRIDAY_OWNER_TOKEN|git clone/);
+  assert.match(command, /^sh -c /);
+  assert.match(command, /hub-ssh/);
+  assert.match(command, /friday-runner-tunnel/);
+  assert.equal(command.includes("\n"), false);
+  const commandFile = join(stateDir, "install.sh");
+  await writeFile(commandFile, command + "\n", { mode: 0o600 });
+  await execFile("sh", ["-n", commandFile]);
+  assert.equal(issued, 1);
+
+  const replay = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inbound) });
+  const replayBody = await replay.json();
+  assert.equal(replayBody.duplicate, true);
+  assert.doesNotMatch(replayBody.reply, /一次性纳管命令/);
+  assert.equal(issued, 1);
+
+  const help = await fetch(`${base}/v2/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...inbound, messageId: randomUUID(), text: "/runner help" }) });
+  assert.match((await help.json()).reply, /\/runner revoke/);
 });
 test("Telegram and iLink provider fixtures normalize only direct messages", () => {
   assert.equal(telegramInbound({ message: { message_id: 7, text: "hi", chat: { type: "private" }, from: { id: 12 } } })?.channel, "telegram");

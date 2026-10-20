@@ -5,6 +5,7 @@ WORKDIR /app
 COPY . .
 RUN npm ci --ignore-scripts \
   && npm run build \
+  && node scripts/build-runner-distribution.mjs \
   && npm prune --omit=dev
 
 FROM node:22.22.0-bookworm-slim AS runtime
@@ -22,6 +23,7 @@ COPY --from=build /app/apps/pi-worker/package.json ./apps/pi-worker/package.json
 COPY --from=build /app/apps/channel-gateway/dist ./apps/channel-gateway/dist
 COPY --from=build /app/apps/channel-gateway/package.json ./apps/channel-gateway/package.json
 COPY --from=build /app/packages/protocol ./packages/protocol
+COPY --from=build /app/runner-distribution/friday-runner.tgz ./runner-distribution/friday-runner.tgz
 
 USER 10001:10001
 EXPOSE 4310

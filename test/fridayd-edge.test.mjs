@@ -72,6 +72,23 @@ test("fridayd configuration rejects unsafe hosts, credentials, and owner ids", (
     FRIDAY_OWNER_TOKEN: "o".repeat(32),
   };
 
+  assert.equal(loadConfig(valid).channelFleetManagementEnabled, undefined);
+  assert.equal(loadConfig(valid).isolatedJobAutoApprovalEnabled, undefined);
+  assert.equal(loadConfig({ ...valid, FRIDAY_ISOLATED_JOB_AUTO_APPROVE: "1" }).isolatedJobAutoApprovalEnabled, true);
+  assert.equal(loadConfig({ ...valid, FRIDAY_ISOLATED_JOB_AUTO_APPROVE: "0" }).isolatedJobAutoApprovalEnabled, false);
+  assert.throws(() => loadConfig({ ...valid, FRIDAY_ISOLATED_JOB_AUTO_APPROVE: "yes" }), /FRIDAY_ISOLATED_JOB_AUTO_APPROVE must be 0 or 1/);
+  assert.equal(loadConfig({ ...valid, FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE: "1" }).channelFleetManagementEnabled, true);
+  assert.throws(() => loadConfig({ ...valid, FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE: "yes" }), /FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE must be 0 or 1/);
+  assert.equal(loadConfig({ ...valid, FRIDAY_RUNNER_SSH_TARGET: "hub-ssh" }).runnerSshTarget, "hub-ssh");
+  assert.equal(loadConfig({ ...valid, FRIDAY_RUNNER_SSH_TARGET: "ubuntu@hub.example" }).runnerSshTarget, "ubuntu@hub.example");
+  assert.equal(loadConfig(valid).runnerTunnelPort, 14_310);
+  assert.equal(loadConfig({ ...valid, FRIDAY_RUNNER_TUNNEL_PORT: "14311" }).runnerTunnelPort, 14_311);
+  assert.throws(() => loadConfig({ ...valid, FRIDAY_RUNNER_SSH_TARGET: "hub ssh" }), /FRIDAY_RUNNER_SSH_TARGET/);
+  assert.throws(() => loadConfig({ ...valid, FRIDAY_RUNNER_SSH_TARGET: "-oProxyCommand=bad" }), /FRIDAY_RUNNER_SSH_TARGET/);
+  for (const port of ["80", "65536", "14310junk", " 14310", "1.5"]) {
+    assert.throws(() => loadConfig({ ...valid, FRIDAY_RUNNER_TUNNEL_PORT: port }), /Invalid FRIDAY_RUNNER_TUNNEL_PORT/);
+  }
+
   for (const host of ["0.0.0.0", "::", "localhost", "private-hub.example"]) {
     assert.throws(
       () => loadConfig({ ...valid, FRIDAY_HOST: host }),

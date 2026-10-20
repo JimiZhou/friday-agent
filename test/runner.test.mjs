@@ -153,13 +153,29 @@ test("runner persists an Ed25519 device identity, enrolls once, and signs regist
   assert.equal(registration.authorization, undefined);
   assert.equal(registration.contentType, "application/json");
   assertBaseEnvelope(registration.body, "register", firstConfig.runnerId);
-  assert.deepEqual(registration.body.payload, {
+  const { systemInfo, ...registrationPayload } = registration.body.payload;
+  assert.deepEqual(registrationPayload, {
     displayName: "Test runner",
     version: RUNNER_VERSION,
     capabilities: ["orchestration"],
     workspaces: ["friday-agent", "diagnostics"],
     shellExecution: false,
   });
+  assert.equal(typeof systemInfo, "object");
+  assert.notEqual(systemInfo, null);
+  assert.equal(Number.isNaN(Date.parse(systemInfo.observedAt)), false);
+  for (const key of ["osName", "kernel", "arch", "cpuModel"]) {
+    assert.equal(typeof systemInfo[key], "string");
+    assert.equal(systemInfo[key].length > 0, true);
+  }
+  assert.equal(systemInfo.osScope === "host" || systemInfo.osScope === "runner", true);
+  assert.equal(systemInfo.runtime === "host" || systemInfo.runtime === "container", true);
+  assert.equal(systemInfo.storageScope, "runner-state");
+  assert.equal(Number.isSafeInteger(systemInfo.cpuThreads) && systemInfo.cpuThreads > 0, true);
+  assert.equal(Number.isSafeInteger(systemInfo.memoryBytes) && systemInfo.memoryBytes >= 0, true);
+  for (const key of ["storageTotalBytes", "storageAvailableBytes"]) {
+    if (systemInfo[key] !== undefined) assert.equal(Number.isSafeInteger(systemInfo[key]) && systemInfo[key] >= 0, true);
+  }
   assert.equal(heartbeat.path, `/v1/runners/${encodeURIComponent(firstConfig.runnerId)}/heartbeat`);
   assert.equal(heartbeat.authorization, undefined);
   assertBaseEnvelope(heartbeat.body, "heartbeat", firstConfig.runnerId);

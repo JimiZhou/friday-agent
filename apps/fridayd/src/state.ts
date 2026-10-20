@@ -5,6 +5,7 @@ import type {
   RunnerEnvelopeV1,
   RunnerHeartbeatEnvelopeV1,
   RunnerRegisterEnvelopeV1,
+  RunnerSystemInfoV1,
 } from "@friday/protocol";
 
 import type { EventRecord } from "./event-store.js";
@@ -30,6 +31,7 @@ export interface RunnerRecord {
   capabilities: readonly string[];
   workspaces: readonly string[];
   shellExecution: false;
+  systemInfo?: RunnerSystemInfoV1;
   /** Authoritative Hub receipt time. This, never sentAt, drives liveness. */
   lastReceivedAt: string;
   /** Backward-compatible display alias for lastReceivedAt. */
@@ -117,6 +119,7 @@ export class FridayState {
         capabilities: [...envelope.payload.capabilities],
         workspaces: [...envelope.payload.workspaces],
         shellExecution: false,
+        ...(envelope.payload.systemInfo === undefined ? {} : { systemInfo: structuredClone(envelope.payload.systemInfo) }),
         lastReceivedAt: receivedAt,
         lastSeenAt: receivedAt,
         lastSentAt: envelope.sentAt,
@@ -159,7 +162,15 @@ export class FridayState {
 
     // Channel ingress is intentionally audit-only in M2. It cannot mutate an
     // Owner task, approval, Runner, or long-term preference by itself.
-    if (event.type === "channel.inbound") return;
+    if (
+      event.type === "channel.inbound" ||
+      event.type === "runner.enrollment.requested" ||
+      event.type === "runner.enrollment.issued" ||
+      event.type === "runner.install-command.issued" ||
+      event.type === "runner.revocation.requested" ||
+      event.type === "runner.revocation.rejected" ||
+      event.type === "runner.revoked"
+    ) return;
 
     throw invalidEvent(event, "unsupported event type");
   }

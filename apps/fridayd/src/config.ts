@@ -1,6 +1,7 @@
 import { isAbsolute, resolve } from "node:path";
 import { createPublicKey } from "node:crypto";
 import { loadVoiceProviderConfig, type VoiceProviderConfig, validateVoiceProviderConfig } from "./m2-registry.js";
+import { DEFAULT_RUNNER_TUNNEL_PORT, RUNNER_SSH_TARGET_PATTERN } from "./runner-distribution.js";
 
 export interface FridayConfig {
   host: string;
@@ -33,6 +34,13 @@ export interface FridayConfig {
   channelGateway?: ChannelGatewayControlConfig;
   /** Allows an explicitly paired private channel to confirm R1/R2 node calls. */
   channelApprovalEnabled?: boolean;
+  /** Allows an explicitly paired private channel to manage Runner enrollment. */
+  channelFleetManagementEnabled?: boolean;
+  /** Default ssh alias or user@host used by IM enrollment commands. */
+  runnerSshTarget?: string;
+  /** Loopback port for the persistent ssh tunnel used by managed Runners. */
+  runnerTunnelPort?: number;
+  isolatedJobAutoApprovalEnabled?: boolean;
   maxBodyBytes: number;
 }
 
@@ -85,6 +93,14 @@ function readPort(value: string | undefined): number {
   return parsed;
 }
 
+function readOptionalPort(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === "") return fallback;
+  if (!/^\d+$/.test(value)) throw new Error(`Invalid ${name}: ${value}`);
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65_535) throw new Error(`Invalid ${name}: ${value}`);
+  return parsed;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): FridayConfig {
   if (env.FRIDAY_RUNNER_TOKEN !== undefined) {
     throw new Error(
@@ -97,6 +113,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): FridayConfig {
   const conversationEnabled = readOptionalBoolean(env.FRIDAY_CONVERSATION_ENABLE, "FRIDAY_CONVERSATION_ENABLE");
   const webSearchEnabled = readOptionalBoolean(env.FRIDAY_WEB_SEARCH_ENABLE, "FRIDAY_WEB_SEARCH_ENABLE");
   const channelApprovalEnabled = readOptionalBoolean(env.FRIDAY_CHANNEL_APPROVAL_ENABLE, "FRIDAY_CHANNEL_APPROVAL_ENABLE");
+  const channelFleetManagementEnabled = readOptionalBoolean(env.FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE, "FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE");
+  const isolatedJobAutoApprovalEnabled = readOptionalBoolean(env.FRIDAY_ISOLATED_JOB_AUTO_APPROVE, "FRIDAY_ISOLATED_JOB_AUTO_APPROVE");
+  const runnerSshTarget = env.FRIDAY_RUNNER_SSH_TARGET?.trim();
+  const runnerTunnelPort = readOptionalPort(env.FRIDAY_RUNNER_TUNNEL_PORT, DEFAULT_RUNNER_TUNNEL_PORT, "FRIDAY_RUNNER_TUNNEL_PORT");
   const conversationAgent = conversationEnabled === true ? loadConversationAgentConfig(env) : undefined;
   const runnerModelProxy = loadRunnerModelProxyConfig(env);
   const channelGateway = loadChannelGatewayControlConfig(env);
@@ -120,6 +140,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): FridayConfig {
     selfImprovementWorkspaceId: env.FRIDAY_SELF_WORKSPACE_ID ?? "friday-agent",
     ...(channelGateway === undefined ? {} : { channelGateway }),
     ...(channelApprovalEnabled === undefined ? {} : { channelApprovalEnabled }),
+    ...(channelFleetManagementEnabled === undefined ? {} : { channelFleetManagementEnabled }),
+    ...(runnerSshTarget === undefined || runnerSshTarget === "" ? {} : { runnerSshTarget }),
+    runnerTunnelPort,
+    ...(isolatedJobAutoApprovalEnabled === undefined ? {} : { isolatedJobAutoApprovalEnabled }),
     maxBodyBytes: 1_048_576,
   };
   validateConfig(config);
@@ -172,6 +196,18 @@ export function validateConfig(config: FridayConfig): void {
   }
   if (config.channelApprovalEnabled !== undefined && typeof config.channelApprovalEnabled !== "boolean") {
     throw new Error("FRIDAY_CHANNEL_APPROVAL_ENABLE must be boolean");
+  }
+  if (config.channelFleetManagementEnabled !== undefined && typeof config.channelFleetManagementEnabled !== "boolean") {
+    throw new Error("FRIDAY_CHANNEL_FLEET_MANAGEMENT_ENABLE must be boolean");
+  }
+  if (config.runnerSshTarget !== undefined && (!RUNNER_SSH_TARGET_PATTERN.test(config.runnerSshTarget) || config.runnerSshTarget.length > 255)) {
+    throw new Error("FRIDAY_RUNNER_SSH_TARGET must be an ssh alias or user@host without spaces");
+  }
+  if (config.runnerTunnelPort !== undefined && (!Number.isInteger(config.runnerTunnelPort) || config.runnerTunnelPort < 1024 || config.runnerTunnelPort > 65_535)) {
+    throw new Error("FRIDAY_RUNNER_TUNNEL_PORT must be an unprivileged TCP port");
+  }
+  if (config.isolatedJobAutoApprovalEnabled !== undefined && typeof config.isolatedJobAutoApprovalEnabled !== "boolean") {
+    throw new Error("FRIDAY_ISOLATED_JOB_AUTO_APPROVE must be boolean");
   }
   if (config.procedureOwnerPublicKeyPem !== undefined) {
     try {

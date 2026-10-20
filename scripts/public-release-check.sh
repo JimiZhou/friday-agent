@@ -27,7 +27,12 @@ for file in "${files[@]}"; do
   fi
 done
 
-forbidden_environment='oracle|racknerd|home-diskstation|alpaca-neon|/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+/\.ssh'
+# Deployment-specific names must never be committed. Private CI or a local
+# release profile can extend this check without storing those names here.
+forbidden_environment='/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+/\.ssh'
+if [[ -n "${FRIDAY_PUBLIC_RELEASE_FORBIDDEN:-}" ]]; then
+  forbidden_environment+="|${FRIDAY_PUBLIC_RELEASE_FORBIDDEN}"
+fi
 secret_signatures='-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|sk-(proj-)?[A-Za-z0-9_-]{24,}|sk-ant-[A-Za-z0-9_-]{20,}|tskey-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[0-9A-Za-z-]{20,}'
 telegram_token='[0-9]{6,}:[A-Za-z0-9_-]{30,}'
 

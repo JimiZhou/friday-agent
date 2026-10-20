@@ -4,8 +4,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { ChannelRuntime, channelControl } from "./channel-runtime.js";
 
-export type Channel = "telegram" | "wechat_ilink";
+export type Channel = "telegram" | "wechat_ilink" | "feishu" | "wecom" | "qq" | "cmcc";
 
 export interface GatewayConfig {
   readonly hubUrl: URL;
@@ -106,7 +107,7 @@ export function loadGatewayConfig(env: NodeJS.ProcessEnv = process.env): Gateway
  * loopback control API to complete QR pairing and atomically persist it.
  */
 export function loadIlinkConfig(env: NodeJS.ProcessEnv = process.env): IlinkConfig | undefined {
-  const base = env.FRIDAY_WECHAT_ILINK_BASE_URL;
+  const base = env.FRIDAY_WECHAT_ILINK_BASE_URL ?? (env.FRIDAY_GATEWAY_STATE_DIR ? "https://ilinkai.weixin.qq.com/" : undefined);
   const stateDir = env.FRIDAY_GATEWAY_STATE_DIR;
   const botToken = emptyToUndefined(env.FRIDAY_WECHAT_ILINK_BOT_TOKEN);
   const controlToken = emptyToUndefined(env.FRIDAY_GATEWAY_CONTROL_TOKEN);
@@ -359,11 +360,11 @@ export async function deliverIlinkNotification(config: IlinkConfig, notification
 }
 
 /** Loopback-only QR control server. The Hub proxies this behind Owner authentication. */
-export async function startIlinkControlServer(config: IlinkConfig, signal: AbortSignal): Promise<{ readonly port: number; stop(): Promise<void> }> {
+export async function startIlinkControlServer(config: IlinkConfig, signal: AbortSignal, runtime?: ChannelRuntime): Promise<{ readonly port: number; stop(): Promise<void> }> {
   if (config.controlToken === undefined) throw new Error("FRIDAY_GATEWAY_CONTROL_TOKEN is required for the iLink control server");
   const logins = new Map<string, IlinkLogin>();
   const loginControllers = new Map<string, AbortController>();
-  const server = createServer((request, response) => void handleIlinkControlRequest(config, logins, loginControllers, request, response).catch((caught) => {
+  const server = createServer((request, response) => void handleIlinkControlRequest(config, logins, loginControllers, request, response, runtime).catch((caught) => {
     process.stderr.write(`[gateway] iLink control request failed: ${safeError(caught)}\n`);
     if (!response.headersSent) controlJson(response, 500, { error: { code: "ILINK_CONTROL_FAILED", message: "iLink control operation failed" } });
     else response.end();
@@ -377,15 +378,19 @@ export async function startIlinkControlServer(config: IlinkConfig, signal: Abort
     server.listen(config.controlPort, "127.0.0.1", resolvePromise);
   });
   return {
-    port: config.controlPort,
+    port: (server.address() as { port: number }).port,
     stop: () => new Promise<void>((resolvePromise, reject) => server.close((error) => error === undefined ? resolvePromise() : reject(error))),
   };
 }
 
-async function handleIlinkControlRequest(config: IlinkConfig, logins: Map<string, IlinkLogin>, controllers: Map<string, AbortController>, request: IncomingMessage, response: ServerResponse): Promise<void> {
+async function handleIlinkControlRequest(config: IlinkConfig, logins: Map<string, IlinkLogin>, controllers: Map<string, AbortController>, request: IncomingMessage, response: ServerResponse, runtime?: ChannelRuntime): Promise<void> {
   if (!bearerMatches(config.controlToken as string, request.headers.authorization)) { controlJson(response, 401, { error: { code: "UNAUTHORIZED", message: "Gateway control token required" } }); return; }
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  if (runtime !== undefined) {
+    const result = await channelControl(runtime, method, url.pathname, () => readSmallJson(request));
+    if (result !== undefined) { controlJson(response, result.status, result.body); return; }
+  }
   if (method === "GET" && url.pathname === "/v1/wechat-ilink/status") {
     const credentials = await readIlinkCredentials(config);
     controlJson(response, 200, credentials === undefined ? { connected: false } : { connected: true, accountId: credentials.accountId, userId: credentials.userId, baseUrl: credentials.baseUrl });
@@ -624,15 +629,20 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathS
   const controller = new AbortController();
   process.once("SIGTERM", () => controller.abort()); process.once("SIGINT", () => controller.abort());
   const adapters: Promise<unknown>[] = [];
+  const runtime = process.env.FRIDAY_GATEWAY_STATE_DIR === undefined ? undefined : new ChannelRuntime(config, resolve(process.env.FRIDAY_GATEWAY_STATE_DIR), controller.signal);
+  if (runtime !== undefined) await runtime.load();
   if (telegramBot !== undefined && config.tokens.telegram !== undefined) {
-    adapters.push(telegramLongPoll(config, telegramBot, controller.signal));
-    adapters.push(channelOutboxLoop(config, "telegram", controller.signal, (notification) => sendTelegramText(telegramBot, { channel: "telegram", messageId: notification.notificationId, senderId: notification.senderId, group: false, text: notification.text }, notification.text, controller.signal)));
+    if (runtime !== undefined) await runtime.legacyTelegram(telegramBot);
+    else {
+      adapters.push(telegramLongPoll(config, telegramBot, controller.signal));
+      adapters.push(channelOutboxLoop(config, "telegram", controller.signal, (notification) => sendTelegramText(telegramBot, { channel: "telegram", messageId: notification.notificationId, senderId: notification.senderId, group: false, text: notification.text }, notification.text, controller.signal)));
+    }
   }
   if (ilink !== undefined && config.tokens.wechat_ilink !== undefined) {
     adapters.push(wechatIlinkLongPoll(config, ilink, controller.signal));
     adapters.push(channelOutboxLoop(config, "wechat_ilink", controller.signal, (notification) => deliverIlinkNotification(ilink, notification, controller.signal)));
   }
-  if (ilink?.controlToken !== undefined) adapters.push(startIlinkControlServer(ilink, controller.signal));
+  if (ilink?.controlToken !== undefined) adapters.push(startIlinkControlServer(ilink, controller.signal, runtime));
   if (adapters.length === 0) process.stdout.write("channel gateway disabled: incomplete provider credentials\n");
   else await Promise.all(adapters);
 }

@@ -276,7 +276,8 @@ test("Pi Worker client waits for agent_settled instead of treating prompt acknow
   assert.equal(await client.runTurn({ sessionId: randomUUID(), prompt: "bounded prompt" }), '{"reply":"真实完成回复"}');
 });
 
-test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent", async (t) => {
+for (const automatic of [false, true]) {
+test(`Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent (automatic=${automatic})`, async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-server-"));
   const outputs = [
     JSON.stringify({ reply: "我会检查节点状态。", jobProposal: { workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "检查服务和磁盘状态", runnerSelector: "auto" } }),
@@ -290,7 +291,7 @@ test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent"
     async close() { this.closed = true; },
   };
   const friday = await createFridayServer(
-    { host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, maxBodyBytes: 1_048_576 },
+    { host: "127.0.0.1", port: 0, stateDir, ownerId: "owner", ownerToken, isolatedJobAutoApprovalEnabled: automatic, maxBodyBytes: 1_048_576 },
     { conversationAgent: agent },
   );
   t.after(async () => { await friday.stop(); await rm(stateDir, { recursive: true, force: true }); });
@@ -323,10 +324,25 @@ test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent"
   assert.equal(conflict.response.status, 409);
   assert.equal(conflict.body.error.code, "MESSAGE_ID_CONFLICT");
 
-  const r1 = await request(base, "/v4/conversations/main/messages", { messageId: randomUUID(), channel: "web", text: "修改代码" });
+  const modification = { messageId: randomUUID(), channel: "web", text: "修改代码" };
+  const r1 = await request(base, "/v4/conversations/main/messages", modification);
   assert.equal(r1.response.status, 202);
   assert.equal(r1.body.scheduling.job.risk, "R1");
-  assert.equal(r1.body.scheduling.job.status, "WAIT_APPROVAL");
+  assert.equal(r1.body.scheduling.job.status, automatic ? "DISPATCHED" : "WAIT_APPROVAL");
+  const policyEvents = friday.store.list().filter((event) => event.type === "job.policy.approved");
+  assert.equal(policyEvents.length, automatic ? 1 : 0);
+  if (automatic) {
+    assert.equal(policyEvents[0].payload.jobId, r1.body.scheduling.job.jobId);
+    const isolated = friday.jobRegistry.get(r1.body.scheduling.job.jobId).spec;
+    assert.ok(isolated);
+    assert.equal(isolated.tool, "codex");
+    assert.equal(isolated.network.mode, "none");
+    assert.deepEqual(isolated.network.allowedHosts, []);
+  }
+  const repeatedModification = await request(base, "/v4/conversations/main/messages", modification);
+  assert.equal(repeatedModification.body.duplicate, true);
+  assert.equal(repeatedModification.body.turn.jobId, r1.body.scheduling.job.jobId);
+  assert.equal(friday.store.list().filter((event) => event.type === "job.policy.approved").length, automatic ? 1 : 0);
   assert.equal(friday.jobRegistry.list().length, 2);
 
   const rejected = await request(base, "/v4/conversations/main/messages", { messageId: randomUUID(), channel: "web", text: "指定节点绕过调度" });
@@ -342,6 +358,7 @@ test("Conversation API creates only Hub-authorized R0/R1 Jobs and is idempotent"
   assert.equal(conversations.response.status, 200);
   assert.deepEqual(conversations.body.conversations.map((conversation) => ({ id: conversation.conversationId, turns: conversation.turnCount })), [{ id: "main", turns: 3 }]);
 });
+}
 
 test("Conversation POST stays explicitly disabled without a real or injected Agent", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-disabled-"));
@@ -353,7 +370,7 @@ test("Conversation POST stays explicitly disabled without a real or injected Age
   assert.equal(result.body.error.code, "AGENT_DISABLED");
 });
 
-test("Hub fleet_status tool returns bounded node facts without Runner identities", async (t) => {
+test("Hub fleet_status tool returns node IDs for the central agent's platform management view", async (t) => {
   const stateDir = await mkdtemp(join(tmpdir(), "friday-conversation-fleet-tool-"));
   const agent = {
     calls: [],
@@ -378,7 +395,7 @@ test("Hub fleet_status tool returns bounded node facts without Runner identities
   assert.equal(agent.calls.length, 2);
   assert.match(agent.calls[1].prompt, /private-node/);
   assert.match(agent.calls[1].prompt, /"trust":"trusted"/);
-  assert.equal(agent.calls[1].prompt.includes(runnerId), false, "fleet tool must not expose Runner identity to the model");
+  assert.equal(agent.calls[1].prompt.includes(runnerId), true, "the central agent needs node IDs to identify management targets");
 });
 
 test("external model self-improvement proposals auto-start only a pre-bound isolated R1 Job", async (t) => {

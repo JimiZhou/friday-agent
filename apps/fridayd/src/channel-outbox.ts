@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { isPrivateChannel, type PrivateChannelV1 } from "@friday/protocol";
 
 import type { JobExecutionStateV2, JobRiskLevelV2, NodeToolCallV1, NodeToolDecisionV1 } from "@friday/protocol";
 import type { SqliteJobRegistry } from "./job-registry.js";
 
-export type OutboundChannel = "telegram" | "wechat_ilink";
+export type OutboundChannel = PrivateChannelV1;
 
 export interface ChannelNotification {
   readonly notificationId: string;
@@ -296,7 +297,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
 
 function requireUuid(value: string, name: string): void { if (!UUID_PATTERN.test(value)) throw new Error(`${name} is invalid`); }
 function requireChannel(value: string): asserts value is OutboundChannel { if (!isChannel(value)) throw new Error("Channel is invalid"); }
-function isChannel(value: unknown): value is OutboundChannel { return value === "telegram" || value === "wechat_ilink"; }
+function isChannel(value: unknown): value is OutboundChannel { return isPrivateChannel(value); }
 function isRisk(value: unknown): value is JobRiskLevelV2 { return value === "R0" || value === "R1" || value === "R2" || value === "R3"; }
 function requireSender(value: string): void { if (value.trim() === "" || Buffer.byteLength(value, "utf8") > 256 || value.includes("\0")) throw new Error("Sender is invalid"); }
 function requireText(value: string): void { if (value.trim() === "" || Buffer.byteLength(value, "utf8") > NOTIFICATION_TEXT_BYTES || value.includes("\0")) throw new Error("Notification text is invalid"); }

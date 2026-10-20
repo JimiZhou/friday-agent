@@ -41,6 +41,7 @@ export class NodeToolPolicy {
     readonly databasePath: string,
     readonly identity: HubIdentity,
     readonly jobs: SqliteJobRegistry,
+    readonly unavailableTools: readonly NodeToolNameV1[] = [],
   ) {}
 
   open(): void {
@@ -99,6 +100,12 @@ export class NodeToolPolicy {
     }
     validateNodeToolCall(call, now);
     const timestamp = now.toISOString();
+    if (this.unavailableTools.includes(call.name)) {
+      const unavailableBackground = `${call.name} is not implemented by the current Runner runtime. This call was not executed. Re-plan with supported read-only tools or an isolated workspace task; asking the Owner for approval cannot enable this tool.`;
+      database.prepare("INSERT INTO node_tool_calls_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DENIED', NULL, ?, ?)")
+        .run(call.callId, call.jobId, call.runnerId, call.leaseId, JSON.stringify(call), callSha256, risk, unavailableBackground, timestamp, timestamp);
+      return { status: "DENIED", risk, background: unavailableBackground };
+    }
     if (risk === "R0") {
       const authorization = this.#authorize(call, callSha256, risk, "policy", job.spec.leaseExpiresAt, now);
       database.prepare("INSERT INTO node_tool_calls_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'APPROVED', ?, ?, ?)")

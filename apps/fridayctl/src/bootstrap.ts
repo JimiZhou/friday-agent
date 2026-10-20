@@ -1,6 +1,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, cp, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, cp, lstat, mkdir, mkdtemp, open, readdir, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -28,10 +29,17 @@ export interface BootstrapOptions {
   readonly serviceUser: string;
   readonly repoRoot: string;
   readonly ownerTokenEnvironment: string;
+  readonly enrollmentFile?: string;
   readonly identityFile?: string;
   readonly port?: number;
   readonly workspaces: readonly WorkspaceBootstrap[];
   readonly dryRun: boolean;
+}
+
+interface EnrollmentCredential {
+  readonly runnerId: string;
+  readonly enrollmentToken: string;
+  readonly expiresAt: string;
 }
 
 export interface RunnerRelease {
@@ -88,6 +96,7 @@ export function parseBootstrapArguments(args: readonly string[], environment: No
   let serviceUser: string | undefined;
   let repoRoot = process.cwd();
   let ownerTokenEnvironment = "FRIDAY_OWNER_TOKEN";
+  let enrollmentFile: string | undefined;
   let identityFile: string | undefined;
   let port: number | undefined;
   let dryRun = false;
@@ -105,6 +114,7 @@ export function parseBootstrapArguments(args: readonly string[], environment: No
       case "--service-user": serviceUser = requireUser(value); break;
       case "--repo-root": repoRoot = resolve(value); break;
       case "--owner-token-env": ownerTokenEnvironment = requireEnvironmentName(value); break;
+      case "--enrollment-file": enrollmentFile = resolve(value); break;
       case "--identity-file": identityFile = resolve(value); break;
       case "--port": port = requirePort(value); break;
       case "--workspace": workspaces.push(requireWorkspace(value)); break;
@@ -116,14 +126,14 @@ export function parseBootstrapArguments(args: readonly string[], environment: No
   if (!dryRun && (environment[ownerTokenEnvironment]?.trim() ?? "") === "") {
     throw new Error(`${ownerTokenEnvironment} must contain the Owner token; tokens are never accepted as command-line arguments`);
   }
-  return { target, hubUrl, controlUrl: controlUrl ?? hubUrl, runnerName, serviceUser, repoRoot, ownerTokenEnvironment, ...(identityFile === undefined ? {} : { identityFile }), ...(port === undefined ? {} : { port }), workspaces, dryRun };
+  return { target, hubUrl, controlUrl: controlUrl ?? hubUrl, runnerName, serviceUser, repoRoot, ownerTokenEnvironment, ...(enrollmentFile === undefined ? {} : { enrollmentFile }), ...(identityFile === undefined ? {} : { identityFile }), ...(port === undefined ? {} : { port }), workspaces, dryRun };
 }
 
 export function bootstrapPlan(options: BootstrapOptions): readonly string[] {
   return [
     `preflight ${options.target} (Linux, Node >=22.19.0, systemd, runuser, root or passwordless sudo)`,
     "build a Runner-only release archive from compiled dist files",
-    `issue a ten-minute enrollment for ${options.runnerName}`,
+    options.enrollmentFile === undefined ? `issue a ten-minute enrollment for ${options.runnerName}` : `use the one-time enrollment in ${options.enrollmentFile}`,
     "copy release and one-time 0600 enrollment handoff over SSH",
     `install and start outbound friday-runner@${options.serviceUser}.service`,
     "verify the enrolled Runner is online at the Hub",
@@ -224,8 +234,11 @@ export async function createRunnerRelease(repoRoot: string, outputDirectory: str
   await cp(join(root, "apps", "runner", "package.json"), join(releaseRoot, "apps", "runner", "package.json"));
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "runner", "friday-runner-managed@.service"), join(releaseRoot, "friday-runner-managed@.service"));
+  await cp(join(root, "deploy", "runner", "install-standalone.mjs"), join(releaseRoot, "install-standalone.mjs"));
+  await rm(join(releaseRoot, "node_modules", "@friday", "protocol"), { recursive: true, force: true });
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
   await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await normalizeDirectoryModes(releaseRoot);
   const archive = join(outputDirectory, "friday-runner.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);
@@ -254,8 +267,10 @@ export async function createSandboxdRelease(repoRoot: string, outputDirectory: s
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "sandboxd", "agent"), join(releaseRoot, "agent"), { recursive: true });
   await cp(join(root, "deploy", "sandboxd", "friday-sandboxd.service"), join(releaseRoot, "friday-sandboxd.service"));
+  await rm(join(releaseRoot, "node_modules", "@friday", "protocol"), { recursive: true, force: true });
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
   await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
+  await normalizeDirectoryModes(releaseRoot);
   const archive = join(outputDirectory, "friday-sandboxd.tgz");
   await execFile("tar", ["--no-xattrs", "-czf", archive, "-C", outputDirectory, basename(releaseRoot)], { timeout: 30_000, env: { ...process.env, COPYFILE_DISABLE: "1" } });
   const bytes = await readFile(archive);
@@ -327,6 +342,7 @@ export async function bootstrapRunner(options: BootstrapOptions, environment: No
   if (options.dryRun) throw new Error("bootstrapRunner cannot mutate a dry-run plan");
   await verifyIdentityFile(options.identityFile);
   await sshPreflight(options);
+  const enrollment = options.enrollmentFile === undefined ? undefined : await readEnrollmentFile(options.enrollmentFile);
   const temporary = await mkdtemp(join(tmpdir(), "fridayctl-bootstrap-"));
   const remoteNonce = randomUUID().replaceAll("-", "");
   const remoteBase = `/tmp/friday-bootstrap-${remoteNonce}`;
@@ -341,15 +357,15 @@ export async function bootstrapRunner(options: BootstrapOptions, environment: No
   try {
     const release = await createRunnerRelease(options.repoRoot, temporary);
     const ownerToken = environment[options.ownerTokenEnvironment] as string;
-    const enrollment = await issueEnrollment(options.controlUrl, ownerToken);
+    const selectedEnrollment = enrollment ?? await issueEnrollment(options.controlUrl, ownerToken);
     const bootstrapFile = join(temporary, "bootstrap.env");
     const serviceFile = join(temporary, "runner.env");
     const workspacesFile = join(temporary, "workspaces.tsv");
     const installerFile = join(options.repoRoot, "deploy", "runner", "install-managed-runner.sh");
     await writeFile(bootstrapFile, shellEnvironment({
       FRIDAY_HUB_URL: options.hubUrl.href.replace(/\/$/, ""),
-      FRIDAY_RUNNER_ID: enrollment.runnerId,
-      FRIDAY_ENROLLMENT_TOKEN: enrollment.enrollmentToken,
+      FRIDAY_RUNNER_ID: selectedEnrollment.runnerId,
+      FRIDAY_ENROLLMENT_TOKEN: selectedEnrollment.enrollmentToken,
       FRIDAY_RUNNER_NAME: options.runnerName,
       FRIDAY_SERVICE_USER: options.serviceUser,
       FRIDAY_RELEASE_ID: release.releaseId,
@@ -373,8 +389,15 @@ export async function bootstrapRunner(options: BootstrapOptions, environment: No
     uploaded = true;
     const privilege = await remotePrivilege(options);
     await ssh(options, `${privilege} sh ${remoteFiles.installer} ${remoteFiles.archive} ${remoteFiles.bootstrap} ${remoteFiles.service} ${remoteFiles.workspaces}`, 120_000);
-    const online = await waitRunnerOnline(options.controlUrl, ownerToken, enrollment.runnerId);
-    return { runnerId: enrollment.runnerId, releaseId: release.releaseId, target: options.target, online };
+    if (options.enrollmentFile !== undefined) {
+      try {
+        await unlink(options.enrollmentFile);
+      } catch {
+        throw new Error("Runner installation succeeded, but the enrollment handoff file could not be removed");
+      }
+    }
+    const online = await waitRunnerOnline(options.controlUrl, ownerToken, selectedEnrollment.runnerId);
+    return { runnerId: selectedEnrollment.runnerId, releaseId: release.releaseId, target: options.target, online };
   } finally {
     await rm(temporary, { recursive: true, force: true });
     if (uploaded) {
@@ -414,7 +437,7 @@ async function remotePrivilege(options: SshConnectionOptions): Promise<"" | "sud
   return output.trim() === "0" ? "" : "sudo -n";
 }
 
-async function issueEnrollment(hubUrl: URL, ownerToken: string): Promise<{ readonly runnerId: string; readonly enrollmentToken: string }> {
+async function issueEnrollment(hubUrl: URL, ownerToken: string): Promise<EnrollmentCredential> {
   const response = await fetch(new URL("/v1/runners/enrollment-tokens", hubUrl), {
     method: "POST",
     redirect: "error",
@@ -423,10 +446,51 @@ async function issueEnrollment(hubUrl: URL, ownerToken: string): Promise<{ reado
     signal: AbortSignal.timeout(10_000),
   });
   const body = await response.json() as Record<string, unknown>;
-  if (!response.ok || typeof body.runnerId !== "string" || !UUID_PATTERN.test(body.runnerId) || typeof body.enrollmentToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.enrollmentToken)) {
+  if (!response.ok || typeof body.runnerId !== "string" || !UUID_PATTERN.test(body.runnerId) || typeof body.enrollmentToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(body.enrollmentToken) || typeof body.expiresAt !== "string" || Date.parse(body.expiresAt) <= Date.now()) {
     throw new Error(`Hub enrollment request failed with ${response.status}`);
   }
-  return { runnerId: body.runnerId.toLowerCase(), enrollmentToken: body.enrollmentToken };
+  return { runnerId: body.runnerId.toLowerCase(), enrollmentToken: body.enrollmentToken, expiresAt: body.expiresAt };
+}
+
+async function normalizeDirectoryModes(directory: string): Promise<void> {
+  await chmod(directory, 0o755);
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await normalizeDirectoryModes(join(directory, entry.name));
+  }
+}
+
+export async function readEnrollmentFile(path: string, now = Date.now()): Promise<EnrollmentCredential> {
+  const file = resolve(path);
+  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || (metadata.mode & 0o777) !== 0o600 || typeof process.getuid !== "function" || metadata.uid !== process.getuid()) {
+      throw new Error("Enrollment handoff file must be a regular file owned by the current user with mode 0600");
+    }
+    if (metadata.size > 4096) throw new Error("Enrollment handoff file is too large");
+    const content = Buffer.alloc(4097);
+    let bytesRead = 0;
+    while (bytesRead < content.length) {
+      const result = await handle.read(content, bytesRead, content.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) break;
+      bytesRead += result.bytesRead;
+    }
+    if (bytesRead > 4096) throw new Error("Enrollment handoff file is too large");
+    const value = JSON.parse(content.subarray(0, bytesRead).toString("utf8")) as unknown;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Enrollment handoff file is invalid");
+    const record = value as Record<string, unknown>;
+    if (
+      Object.keys(record).sort().join(",") !== "enrollmentToken,expiresAt,runnerId" ||
+      typeof record.runnerId !== "string" || !UUID_PATTERN.test(record.runnerId) ||
+      typeof record.enrollmentToken !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(record.enrollmentToken) ||
+      typeof record.expiresAt !== "string" || !Number.isFinite(Date.parse(record.expiresAt)) || new Date(record.expiresAt).toISOString() !== record.expiresAt || Date.parse(record.expiresAt) <= now
+    ) {
+      throw new Error("Enrollment handoff file is invalid or expired");
+    }
+    return { runnerId: record.runnerId.toLowerCase(), enrollmentToken: record.enrollmentToken, expiresAt: record.expiresAt };
+  } finally {
+    await handle.close();
+  }
 }
 
 async function waitRunnerOnline(hubUrl: URL, ownerToken: string, runnerId: string): Promise<boolean> {
@@ -499,6 +563,6 @@ function requireText(value: string, name: string, max: number): string { const t
 function requireEnvironmentName(value: string): string { if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(value)) throw new Error("--owner-token-env is invalid"); return value; }
 function requirePort(value: string): number { if (!/^\d+$/.test(value)) throw new Error("--port is invalid"); const port = Number(value); if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port is invalid"); return port; }
 function requireWorkspace(value: string): WorkspaceBootstrap { const separator = value.indexOf("="); const workspaceId = value.slice(0, separator); const path = value.slice(separator + 1); if (separator < 1 || !WORKSPACE_PATTERN.test(workspaceId) || !path.startsWith("/srv/friday-workspaces/") || /[\t\r\n\0]/.test(path)) throw new Error("--workspace must be id=/srv/friday-workspaces/<git-root>"); return { workspaceId, path }; }
-function usage(detail?: string): Error { return new Error(`${detail === undefined ? "" : `${detail}\n`}Usage: fridayctl runner bootstrap <user@host> --hub-url <https-url> [--control-url <https-or-loopback-url>] --runner-name <name> --service-user <user> [--identity-file <path>] [--port <port>] [--workspace <id=/srv/friday-workspaces/repo>] [--dry-run]`); }
+function usage(detail?: string): Error { return new Error(`${detail === undefined ? "" : `${detail}\n`}Usage: fridayctl runner bootstrap <user@host> --hub-url <https-url> [--control-url <https-or-loopback-url>] --runner-name <name> --service-user <user> [--enrollment-file <path>] [--identity-file <path>] [--port <port>] [--workspace <id=/srv/friday-workspaces/repo>] [--dry-run]`); }
 function sandboxUsage(detail?: string): Error { return new Error(`${detail === undefined ? "" : `${detail}\n`}Usage: fridayctl runner sandbox install <user@host> --hub-url <https-origin> --service-user <user> [--identity-file <path>] [--port <port>] [--dry-run]`); }
 function runnerUpgradeUsage(detail?: string): Error { return new Error(`${detail === undefined ? "" : `${detail}\n`}Usage: fridayctl runner upgrade <user@host> --service-user <user> [--identity-file <path>] [--port <port>] [--dry-run]`); }

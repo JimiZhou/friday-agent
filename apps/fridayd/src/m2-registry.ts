@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { isPrivateChannel } from "@friday/protocol";
 
 export interface MemoryView {
   readonly id: string;
@@ -31,6 +32,11 @@ export class ChannelIngestRegistry {
   constructor(readonly path: string) {}
   open(): void { this.#db=new DatabaseSync(this.path); this.#db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS channel_ingest_v1 (channel TEXT PRIMARY KEY, token_hash TEXT NOT NULL, paired_sender TEXT, updated_at TEXT NOT NULL) STRICT; CREATE TABLE IF NOT EXISTS channel_replay_v1 (channel TEXT NOT NULL, message_id TEXT NOT NULL, received_at TEXT NOT NULL, PRIMARY KEY(channel,message_id)) STRICT;"); }
   close(): void {this.#db?.close();this.#db=undefined;}
+  configure(channel: string, token: string, sender: string): void {
+    requireChannel(channel); requireText(sender, "sender", 256);
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error("Invalid ingest token");
+    this.db.prepare("INSERT INTO channel_ingest_v1 VALUES(?,?,?,?) ON CONFLICT(channel) DO UPDATE SET token_hash=excluded.token_hash,paired_sender=excluded.paired_sender,updated_at=excluded.updated_at").run(channel, hash(token), sender, new Date().toISOString());
+  }
   rotate(channel:string):string { requireChannel(channel); const token=randomBytes(32).toString("base64url");this.db.prepare("INSERT INTO channel_ingest_v1 VALUES(?,?,NULL,?) ON CONFLICT(channel) DO UPDATE SET token_hash=excluded.token_hash,paired_sender=NULL,updated_at=excluded.updated_at").run(channel,hash(token),new Date().toISOString());return token; }
   pair(channel:string,sender:string):void {requireChannel(channel);requireText(sender,"sender",256);const result=this.db.prepare("UPDATE channel_ingest_v1 SET paired_sender=?,updated_at=? WHERE channel=?").run(sender,new Date().toISOString(),channel);if(result.changes!==1)throw new Error("Channel has no ingest credential");}
   authorize(channel:string,token:string):boolean {try{requireChannel(channel);if(!/^[A-Za-z0-9_-]{43}$/.test(token))return false;}catch{return false;}const row=this.db.prepare("SELECT token_hash AS h FROM channel_ingest_v1 WHERE channel=?").get(channel) as {h:string}|undefined;return row!==undefined&&same(row.h,hash(token));}
@@ -65,5 +71,5 @@ export class OpenAiVoiceClient {
   async synthesize(text:string,voice="alloy"):Promise<{readonly mimeType:string;readonly bytes:Buffer}>{requireText(text,"TTS text",16_384);if(!/^[a-z0-9_-]{1,64}$/i.test(voice))throw new Error("TTS voice is invalid");const response=await fetch(new URL("audio/speech",this.config.baseUrl),{method:"POST",redirect:"error",headers:{authorization:`Bearer ${this.config.apiKey}`,"content-type":"application/json"},body:JSON.stringify({model:this.config.ttsModel,input:text,voice,format:"mp3"}),signal:AbortSignal.timeout(60_000)});if(!response.ok)throw new Error("Voice synthesis provider rejected the request");const bytes=Buffer.from(await response.arrayBuffer());if(bytes.byteLength<1||bytes.byteLength>8*1024*1024)throw new Error("Voice synthesis provider returned invalid media");const contentType=response.headers.get("content-type")?.split(";",1)[0]??"audio/mpeg";if(!/^audio\//.test(contentType))throw new Error("Voice synthesis provider returned invalid media type");return{mimeType:contentType,bytes};}
 }
 function stripPath(value:StoredVoiceMedia):VoiceMedia{return{id:value.id,mimeType:value.mimeType,sizeBytes:value.sizeBytes,sha256:value.sha256,expiresAt:value.expiresAt};}
-function requireChannel(value:string):void {if(value!=="telegram"&&value!=="wechat_ilink")throw new Error("Unsupported channel");} function requireId(value:string):void {if(!/^[a-f0-9]{32}$/i.test(value)&&! /^[0-9a-f]{8}-/i.test(value))throw new Error("Invalid id");} function requireText(value:string,name:string,max:number):void {if(typeof value!=="string"||value.trim()===""||value.length>max)throw new Error(`Invalid ${name}`);}
+function requireChannel(value:string):void {if(!isPrivateChannel(value))throw new Error("Unsupported channel");} function requireId(value:string):void {if(!/^[a-f0-9]{32}$/i.test(value)&&! /^[0-9a-f]{8}-/i.test(value))throw new Error("Invalid id");} function requireText(value:string,name:string,max:number):void {if(typeof value!=="string"||value.trim()===""||value.length>max)throw new Error(`Invalid ${name}`);}
 function hash(s:string){return createHash("sha256").update(s).digest("hex");}function same(a:string,b:string){const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&timingSafeEqual(x,y);}
