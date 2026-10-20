@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { join } from "node:path";
@@ -12,10 +12,12 @@ import type { EventStore } from "./event-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
 import { SqliteRunnerRegistry } from "./runner-registry.js";
 import { loadOrCreateHubIdentity, type HubIdentity } from "./hub-identity.js";
-import { SqliteJobRegistry, type JobCreateInput } from "./job-registry.js";
+import { SqliteJobRegistry, type JobCreateInput, type JobViewV2 } from "./job-registry.js";
 import { WebAuthnRegistry } from "./webauthn-registry.js";
 import { ChannelIngestRegistry, MemoryRegistry, OpenAiVoiceClient, VoiceMediaRegistry } from "./m2-registry.js";
 import { ChannelOutbox, JobChannelNotifier, type OutboundChannel } from "./channel-outbox.js";
+import { isPrivateChannel } from "@friday/protocol";
+import { ChannelPlatformManagement, platformMenu } from "./channel-platform-management.js";
 import { AdapterRegistry, McpBroker, McpRegistry, ProcedureRegistry, SelfPatchRegistry, SkillRegistry, type AdapterDefinition, type ApprovalRisk, type McpDefinition, type SelfImprovementContext, type SignedProcedure, type SignedSkill } from "./m3-registry.js";
 import { invokeMcpBrokerSidecar } from "./mcp-broker-sidecar.js";
 import { FridayState, jsonDigest, runnerEnvelopeDigest, type JobView } from "./state.js";
@@ -45,6 +47,7 @@ import { ownerPasswordMatches } from "./owner-password.js";
 import { RunnerModelAccessBroker, modelProxyResponseHeaders } from "./model-access.js";
 import { ChannelFleetManagement } from "./channel-fleet-management.js";
 import { NodeToolPolicy } from "./node-tool-policy.js";
+import { loadRunnerDistribution, RUNNER_BUNDLE_PATH, runnerInstallCommand, runnerSshInstallCommand, validateRunnerInstallInput, validateRunnerSshTarget } from "./runner-distribution.js";
 import {
   OWNER_WEB_CSS as OWNER_CONSOLE_CSS,
   OWNER_WEB_HTML as OWNER_CONSOLE_HTML,
@@ -526,6 +529,7 @@ function conversationAgentFromConfig(config: FridayConfig): ConversationAgent | 
 export interface FridayServerOptions {
   /** Test/host injection point; null explicitly keeps the Agent disabled. */
   readonly conversationAgent?: ConversationAgent | null;
+  readonly runnerDistributionDirectory?: string;
 }
 
 export interface FridayServer {
@@ -564,7 +568,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   const runnerRegistry = new SqliteRunnerRegistry(databasePath);
   const hubIdentity = await loadOrCreateHubIdentity(config.stateDir);
   const jobRegistry = new SqliteJobRegistry(databasePath, hubIdentity);
-  const nodeToolPolicy = new NodeToolPolicy(databasePath, hubIdentity, jobRegistry);
+  const nodeToolPolicy = new NodeToolPolicy(databasePath, hubIdentity, jobRegistry,
+    config.isolatedJobAutoApprovalEnabled === true ? ["file.write", "file.delete", "process.signal", "service.restart", "command.exec"] : []);
   const modelAccessBroker = config.runnerModelProxy === undefined ? undefined : new RunnerModelAccessBroker(config.runnerModelProxy, jobRegistry);
   const memoryRegistry = new MemoryRegistry(databasePath);
   const channelRegistry = new ChannelIngestRegistry(databasePath);
@@ -731,6 +736,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
 
   function conversationTools(): readonly ConversationToolDefinition[] {
     return [
+      { name: "platform_status", description: "Read Friday's global platform view: devices, tasks, channel readiness, adapters, memory and self-improvement status. Empty input." },
+      { name: "platform_menu", description: "Show the platform operation menu available in paired IM private chats. Empty input. For enrollment, revocation or task cancellation, direct the Owner to the exact menu command; never claim an action was executed without a tool result." },
       {
         name: "fleet_status",
         description: "Read the current Hub-owned status and declared capabilities of enrolled managed nodes. Input may be empty.",
@@ -743,6 +750,8 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   }
 
   async function invokeConversationTool(call: ConversationToolCall): Promise<ConversationToolResult> {
+    if (call.name === "platform_status") return { trust: "trusted", text: await platformStatus() };
+    if (call.name === "platform_menu") return { trust: "trusted", text: platformMenu(config.publicOrigin) };
     if (call.name === "web_search") {
       if (webSearch === undefined) throw new Error("WEB_SEARCH_DISABLED");
       return { trust: "untrusted", text: JSON.stringify(await webSearch.search(call.input)) };
@@ -750,7 +759,9 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     if (call.name === "fleet_status") {
       const assignedJobs = jobRegistry.nonTerminalCountByRunner();
       const nodes = state.listRunners().map((runner) => ({
+        runnerId: runner.nodeId,
         name: runner.displayName,
+        systemInfo: runner.systemInfo ?? null,
         enrolled: runnerRegistry.isEnrolled(runner.nodeId),
         revocationPending: channelFleetManagement.isPendingRevocation(runner.nodeId),
         online: runner.online,
@@ -773,10 +784,10 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
     throw new Error("TOOL_NOT_AVAILABLE");
   }
 
-  function scheduleConversationProposal(
+  async function scheduleConversationProposal(
     proposal: ConversationJobProposal,
     idempotencyKey: string,
-  ): ConversationScheduleResult {
+  ): Promise<ConversationScheduleResult> {
     const input: Omit<JobCreateInput, "runnerId"> = {
       idempotencyKey,
       workspaceId: proposal.workspaceId,
@@ -789,7 +800,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       if (idempotency.outcome === "conflict") {
         return { outcome: "rejected", code: "JOB_IDEMPOTENCY_CONFLICT", message: "Turn id is already bound to a different Job request" };
       }
-      if (idempotency.outcome === "duplicate") return { outcome: "created", job: idempotency.job };
+      if (idempotency.outcome === "duplicate") return { outcome: "created", job: await approveIsolatedConversationJob(idempotency.job) };
       const selection = selectFleetRunner(
         { workspaceId: proposal.workspaceId, tool: proposal.tool },
         fleetSchedulingContext(),
@@ -798,10 +809,16 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         return { outcome: "rejected", code: "NO_COMPATIBLE_RUNNER", message: "No online enrolled Runner matches this proposal" };
       }
       const result = jobRegistry.create({ ...input, runnerId: selection.runnerId });
-      return { outcome: "created", job: result.job };
+      return { outcome: "created", job: await approveIsolatedConversationJob(result.job) };
     } catch {
       return { outcome: "rejected", code: "JOB_PROPOSAL_REJECTED", message: "The Hub rejected the proposed Job" };
     }
+  }
+
+  async function approveIsolatedConversationJob(job: JobViewV2): Promise<JobViewV2> {
+    if (config.isolatedJobAutoApprovalEnabled !== true || job.risk !== "R1" || job.tool === "agent" || job.status !== "WAIT_APPROVAL") return job;
+    await store.append("job.policy.approved", { jobId: job.jobId, policy: "isolated-conversation-v1", risk: job.risk, tool: job.tool, workspaceId: job.workspaceId, runnerId: job.runnerId });
+    return jobRegistry.approve(job.jobId, "policy:isolated-conversation-v1");
   }
 
   function scheduleConversationSelfImprovement(
@@ -895,18 +912,40 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         runnerId: runner.nodeId,
         name: runner.displayName,
         online: runner.online,
+        ...(runner.systemInfo === undefined ? {} : { systemInfo: runner.systemInfo }),
         activeJobs: Math.max(runner.activeJobs, assignedJobs.get(runner.nodeId) ?? 0),
         enrolled: runnerRegistry.isEnrolled(runner.nodeId),
         revocationPending: channelFleetManagement.isPendingRevocation(runner.nodeId),
       }));
     },
-    issueEnrollment: (channel, senderId) => mutate(async () => {
-      const runnerId = randomUUID();
-      await store.append("runner.enrollment.requested", { channel, senderId, runnerId });
-      const enrollment = runnerRegistry.issueEnrollment(Date.now(), runnerId);
-      await store.append("runner.enrollment.issued", { channel, senderId, runnerId, expiresAt: enrollment.expiresAt });
-      return enrollment;
-    }),
+    issueInstallCommand: async (channel, senderId, request) => {
+      const sshTarget = request.sshTarget ?? config.runnerSshTarget;
+      if (request.serviceUser !== undefined && !/^[a-z_][a-z0-9_-]{0,31}$/.test(request.serviceUser)) return { ok: false, message: "服务用户名只能包含小写字母、数字、下划线和短横线。" };
+      if (request.runnerName !== undefined && (!request.runnerName.trim() || request.runnerName.length > 128 || /[\x00-\x1f\x7f]/.test(request.runnerName))) return { ok: false, message: "设备名不可为空，且不能包含控制字符。" };
+      try { if (sshTarget !== undefined) validateRunnerSshTarget(sshTarget); }
+      catch { return { ok: false, message: "SSH 目标格式无效；请使用 ssh 别名或 user@host。" }; }
+      if (sshTarget === undefined && config.publicOrigin === undefined) {
+        return { ok: false, message: "Hub 尚未配置默认 SSH 纳管目标。请让 Owner 设置 `FRIDAY_RUNNER_SSH_TARGET`，或发送 `/runner add <设备名> <服务用户> <SSH目标>`。" };
+      }
+      let bundle;
+      try { bundle = await loadRunnerDistribution(options.runnerDistributionDirectory); }
+      catch { return { ok: false, message: "Runner 分发包尚未构建；请让 Owner 重新部署 Hub 后再试。" }; }
+      try {
+        return await mutate(async () => {
+          const runnerId = randomUUID();
+          const enrollment = runnerRegistry.issueEnrollment(Date.now(), runnerId);
+          const bound = server.address();
+          const hubPort = typeof bound === "object" && bound !== null ? bound.port : config.port;
+          const command = sshTarget === undefined
+            ? runnerInstallCommand({ hubUrl: config.publicOrigin as string, ...(request.runnerName === undefined ? {} : { runnerName: request.runnerName }), ...(request.serviceUser === undefined ? {} : { serviceUser: request.serviceUser }) }, enrollment, bundle.sha256)
+            : runnerSshInstallCommand({ sshTarget, tunnelPort: config.runnerTunnelPort ?? 14_310, hubPort, ...(request.runnerName === undefined ? {} : { runnerName: request.runnerName }), ...(request.serviceUser === undefined ? {} : { serviceUser: request.serviceUser }) }, enrollment, bundle.sha256);
+          await store.append("runner.install-command.issued", { channel, senderId, runnerId, runnerName: request.runnerName ?? null, mode: sshTarget === undefined ? "https" : "ssh", releaseId: bundle.releaseId, expiresAt: enrollment.expiresAt });
+          return { ok: true as const, install: { command, expiresAt: enrollment.expiresAt } };
+        });
+      } catch {
+        return { ok: false, message: "生成纳管命令失败；请检查 Hub 配置和 Runner 分发包。" };
+      }
+    },
     checkRevocation: checkChannelRunnerRevocation,
     revokeRunner: (runnerId, channel, senderId) => mutate(async () => {
       const problem = checkChannelRunnerRevocation(runnerId);
@@ -922,7 +961,62 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         return "这台节点已经撤销纳管；没有重复执行。";
       }
       await store.append("runner.revoked", { channel, senderId, runnerId });
-      return `已撤销节点 \`${runnerId}\` 的纳管凭据。它将不能再连接 Hub。`;
+      const name = state.listRunners().find((runner) => runner.nodeId === runnerId)?.displayName ?? "该设备";
+      return `已撤销「${name}」的纳管凭据。它将不能再连接 Hub。`;
+    }),
+  });
+
+  async function platformStatus(): Promise<string> {
+    const runners = state.listRunners();
+    const jobs = jobRegistry.list();
+    return JSON.stringify({
+      observedAt: new Date().toISOString(),
+      role: "Friday is the central Hub agent with a global platform view; management actions use Hub tools and existing authorization.",
+      transport: "Runners initiate outbound connections to Hub; Hub dispatches commands over Runner pulls.",
+      devices: runners.map((runner) => ({ runnerId: runner.nodeId, name: runner.displayName, online: runner.online, enrolled: runnerRegistry.isEnrolled(runner.nodeId), workspaces: runner.workspaces, activeJobs: runner.activeJobs, systemInfo: runner.systemInfo ?? null })),
+      tasks: jobs.slice(0, 30).map((job) => ({ jobId: job.jobId, runnerId: job.runnerId, operation: job.operation, status: job.status })),
+      adapters: adapterRegistry.list().map(({ runnerId, adapter, enabled }) => ({ runnerId, adapter, enabled })),
+      channels: await platformChannels(),
+      memory: { candidates: memoryRegistry.list().filter((memory) => memory.status === "PENDING").length, confirmed: memoryRegistry.exportConfirmed().length },
+      improvements: selfPatchRegistry.list().slice(0, 10).map((item) => ({ id: item.id, status: item.state })),
+      imManagementEnabled: config.channelFleetManagementEnabled === true,
+      autonomy: { readOnlyNodeTools: "automatic", isolatedConversationJobs: config.isolatedJobAutoApprovalEnabled === true ? "automatic" : "owner_confirmation", productionChanges: "separate_authorization", destructiveActions: "owner_confirmation" },
+      menu: platformMenu(config.publicOrigin),
+    });
+  }
+
+  async function platformChannels(): Promise<string> {
+    if (config.channelGateway === undefined) return "Channel Gateway 未配置。";
+    try {
+      const result = await channelGatewayRequest("/v1/channels/status");
+      const status = await channelGatewayRequest("/v1/wechat-ilink/status");
+      const names: Record<string, string> = { telegram: "Telegram", feishu: "飞书", wecom: "企业微信", qq: "QQ 机器人", cmcc: "中国移动新消息" };
+      const lines = Array.isArray(result.channels) ? result.channels.filter(isRecord).map((item) => (names[String(item.channel)] ?? String(item.channel)) + "：" + (item.connected === true ? "已连接" : item.configured === true ? "已配置，连接中" : "未配置")) : [];
+      return ["微信 iLink：" + (status.connected === true ? "已绑定" : "未绑定"), ...lines].join("\n") +
+        (config.publicOrigin === undefined ? "" : "\n渠道配置：" + config.publicOrigin + "/#devices") +
+        "\n渠道凭据不在聊天中展示。";
+    } catch { return "Channel Gateway 状态暂不可用，请检查网关服务。"; }
+  }
+
+  const channelPlatformManagement = new ChannelPlatformManagement({
+    enabled: config.channelFleetManagementEnabled === true,
+    ...(config.publicOrigin === undefined ? {} : { hubOrigin: config.publicOrigin }),
+    status: async () => {
+      const runners = state.listRunners().filter((runner) => runnerRegistry.isEnrolled(runner.nodeId));
+      const jobs = jobRegistry.list();
+      const active = jobs.filter((job) => !["SUCCEEDED", "FAILED", "CANCELLED"].includes(job.status));
+      return [`Friday 平台总览`, `设备：${runners.filter((runner) => runner.online).length} 在线 / ${runners.length} 已纳管`, `任务：${active.length} 个未完成 / ${jobs.length} 个最近记录`, await platformChannels(), `发送 /devices 查看设备，/tasks 查看任务，/menu 查看所有操作。`].join("\n\n");
+    },
+    tasks: () => jobRegistry.list(),
+    channels: platformChannels,
+    stopTask: (jobId, channel, senderId) => mutate(async () => {
+      await store.append("job.stop.requested", { jobId, channel, senderId, confirmed: true });
+      try {
+        jobRegistry.cancel(jobId);
+        modelAccessBroker?.revokeJob(jobId);
+        jobChannelNotifier.observe(jobId);
+        return `已发送停止请求：${jobId}。已完成的修改不会自动撤回。`;
+      } catch { return "该任务当前无法停止，请刷新任务状态。"; }
     }),
   });
 
@@ -971,7 +1065,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
   }
 
   async function approveFromPrivateChannel(channel: string, senderId: string, text: string): Promise<string | undefined> {
-    if (config.channelApprovalEnabled !== true || !isChannelApprovalCommand(text) || (channel !== "telegram" && channel !== "wechat_ilink")) return undefined;
+    if (config.channelApprovalEnabled !== true || !isChannelApprovalCommand(text) || !isPrivateChannel(channel)) return undefined;
     const pending = channelOutbox.findPendingClearance(channel, senderId);
     if (pending === undefined) return undefined;
     if (pending.risk === "R3") return "这一步影响范围较大，需要到 Web 控制台确认。我先不执行。";
@@ -1030,6 +1124,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       const isRunnerV2 = method === "POST" && /^\/v2\/runners\/[0-9a-f-]+(?:\/pull|\/jobs\/[0-9a-f-]+\/(?:events|reconcile|model-access|agent-resume|node-tools\/(?:evaluate|[0-9a-f-]+\/status)|artifacts\/[0-9a-f-]+))$/i.test(url.pathname);
       const isModelProxy = method === "POST" && /^\/v2\/model-proxy\/(?:openai|anthropic)\/v1\/(?:responses(?:\/compact)?|chat\/completions|messages(?:\/count_tokens)?)$/.test(url.pathname);
       const isHubKey = method === "GET" && url.pathname === "/v2/hub-key";
+      const isRunnerBundle = method === "GET" && url.pathname === RUNNER_BUNDLE_PATH;
       const isWebAuthnBootstrapContinue = method === "POST" && ["/v2/auth/register/options", "/v2/auth/register/verify"].includes(url.pathname);
       const isWebAuthnLogin = method === "POST" && ["/v2/auth/login/options", "/v2/auth/login/verify"].includes(url.pathname);
       const isPasswordLogin = method === "POST" && url.pathname === "/v2/auth/login";
@@ -1037,7 +1132,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
       const isPublicWeb = method === "GET" && (url.pathname === "/" || url.pathname === "/app");
       const isPublicWebAsset = method === "GET" && (url.pathname === "/assets/friday.css" || url.pathname === "/assets/friday.js");
       const isChannelInbound = method === "POST" && url.pathname === "/v2/inbound";
-      const isChannelOutbox = /^\/v2\/channels\/(telegram|wechat_ilink)\/outbox(?:\/[0-9a-f-]+\/ack)?$/i.test(url.pathname) && (method === "GET" || method === "POST");
+      const isChannelOutbox = /^\/v2\/channels\/(telegram|wechat_ilink|feishu|wecom|qq|cmcc)\/outbox(?:\/[0-9a-f-]+\/ack)?$/i.test(url.pathname) && (method === "GET" || method === "POST");
       if (
         !isRunnerRegistration &&
         !isRunnerHeartbeat &&
@@ -1045,6 +1140,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         !isRunnerV2 &&
         !isModelProxy &&
         !isHubKey &&
+        !isRunnerBundle &&
         !isWebAuthnBootstrapContinue &&
         !isWebAuthnLogin &&
         !isPasswordLogin &&
@@ -1059,6 +1155,29 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           response.setHeader("www-authenticate", 'Basic realm="Friday Agent", charset="UTF-8"');
         }
         error(response, 401, "UNAUTHORIZED", config.webPassword === undefined ? "A valid bearer token is required" : "Friday Basic Auth credentials are required");
+        return;
+      }
+
+      if (isRunnerBundle) {
+        try {
+          const bundle = await loadRunnerDistribution(options.runnerDistributionDirectory);
+          response.writeHead(200, { "content-type": "application/gzip", "content-length": bundle.bytes.byteLength, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+          response.end(bundle.bytes);
+        } catch { error(response, 503, "RUNNER_BUNDLE_UNAVAILABLE", "Build the Runner distribution before issuing an installation command"); }
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/v1/runners/enrollment-command") {
+        const body = await parseJsonBody(request, config.maxBodyBytes);
+        let input;
+        try { input = validateRunnerInstallInput(body.value); }
+        catch { error(response, 400, "INVALID_INSTALL_REQUEST", "Provide an HTTPS Hub origin, device name and service user"); return; }
+        let bundle;
+        try { bundle = await loadRunnerDistribution(options.runnerDistributionDirectory); }
+        catch { error(response, 503, "RUNNER_BUNDLE_UNAVAILABLE", "Build the Runner distribution before issuing an installation command"); return; }
+        const enrollment = runnerRegistry.issueEnrollment();
+        await store.append("runner.install-command.issued", { runnerId: enrollment.runnerId, runnerName: input.runnerName, releaseId: bundle.releaseId, expiresAt: enrollment.expiresAt });
+        json(response, 201, { ...enrollment, command: runnerInstallCommand(input, enrollment, bundle.sha256), bundleSha256: bundle.sha256 });
         return;
       }
 
@@ -1112,6 +1231,32 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const session = webauthnRegistry.issueSession();
         setOwnerSessionCookies(response, session);
         json(response, 200, { authenticated: true, expiresAt: session.expiresAt });
+        return;
+      }
+
+      if (method === "GET" && url.pathname === "/v4/channels") {
+        if (config.channelGateway === undefined) { json(response, 200, { configured: false, channels: [] }); return; }
+        try { json(response, 200, { configured: true, ...await channelGatewayRequest("/v1/channels/status") }); }
+        catch { error(response, 502, "CHANNEL_GATEWAY_UNAVAILABLE", "Channel Gateway is unavailable"); }
+        return;
+      }
+      const channelConfigure = url.pathname.match(/^\/v4\/channels\/(telegram|feishu|wecom|qq|cmcc)\/(configure|disable)$/);
+      if (method === "POST" && channelConfigure?.[1] !== undefined) {
+        if (config.channelGateway === undefined) { error(response, 503, "CHANNEL_GATEWAY_DISABLED", "Channel Gateway is not configured"); return; }
+        const channel = channelConfigure[1], action = channelConfigure[2];
+        const body = await parseJsonBody(request, 16 * 1024);
+        if (action === "configure" && (!isRecord(body.value) || Object.keys(body.value).some((key) => key !== "senderId" && key !== "credentials") || typeof body.value.senderId !== "string" || !body.value.senderId.trim() || body.value.senderId.length > 256 || !isRecord(body.value.credentials))) { error(response, 400, "INVALID_CHANNEL_CONFIG", "senderId and credentials are required"); return; }
+        if (action === "disable" && !isEmptyObject(body.value)) { error(response, 400, "INVALID_CHANNEL_CONFIG", "Body must be empty"); return; }
+        try {
+          await mutate(async () => {
+            const token = randomBytes(32).toString("base64url");
+            const value = body.value as Record<string, unknown>;
+            await channelGatewayRequest(`/v1/channels/${channel}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(action === "configure" ? { ...value, ingestToken: token } : {}) });
+            if (action === "configure") channelRegistry.configure(channel, token, value.senderId as string);
+            else channelRegistry.rotate(channel);
+          });
+          json(response, 200, { configured: action === "configure" });
+        } catch { error(response, 502, "CHANNEL_CONFIGURATION_FAILED", "Check channel fields and Gateway availability"); }
         return;
       }
 
@@ -1425,6 +1570,11 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         const acceptance = channelRegistry.accept(inbound.channel,inbound.token,inbound.senderId,inbound.messageId,inbound.group);
         if (acceptance === "rejected") { error(response,401,"INBOUND_REJECTED","Channel is unpaired, grouped, or unauthorized"); return; }
         if (acceptance === "new") await mutate(async()=>{ await store.append("channel.inbound",{channel:inbound.channel,messageId:inbound.messageId,senderId:inbound.senderId,textDigest:jsonDigest(inbound.text)}); });
+        const platformReply = await channelPlatformManagement.handle(inbound.channel, inbound.senderId, inbound.text, Date.now(), acceptance === "new");
+        if (platformReply !== undefined) {
+          json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: platformReply });
+          return;
+        }
         const directFleetReply = await channelFleetManagement.handle(inbound.channel, inbound.senderId, inbound.text, Date.now(), acceptance === "new");
         if (directFleetReply !== undefined) {
           json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: directFleetReply });
@@ -1435,7 +1585,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           json(response, 202, { accepted: true, duplicate: acceptance === "replay", reply: directApprovalReply });
           return;
         }
-        if (conversationOrchestrator === undefined || (inbound.channel !== "telegram" && inbound.channel !== "wechat_ilink")) {
+        if (conversationOrchestrator === undefined || !isPrivateChannel(inbound.channel)) {
           json(response,202,{accepted:true,duplicate:acceptance === "replay"}); return;
         }
         const conversationId = `${inbound.channel}-${jsonDigest(inbound.senderId).slice(0, 24)}`;
@@ -1457,7 +1607,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         return;
       }
 
-      const channelOutboxMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink)\/outbox$/i);
+      const channelOutboxMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink|feishu|wecom|qq|cmcc)\/outbox$/i);
       if (method === "GET" && channelOutboxMatch?.[1] !== undefined) {
         const channel = channelOutboxMatch[1].toLowerCase() as OutboundChannel;
         const token = singleHeader(request.headers.authorization)?.replace(/^Bearer /, "") ?? "";
@@ -1466,7 +1616,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
         return;
       }
 
-      const channelOutboxAckMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink)\/outbox\/([0-9a-f-]+)\/ack$/i);
+      const channelOutboxAckMatch = url.pathname.match(/^\/v2\/channels\/(telegram|wechat_ilink|feishu|wecom|qq|cmcc)\/outbox\/([0-9a-f-]+)\/ack$/i);
       if (method === "POST" && channelOutboxAckMatch?.[1] !== undefined && channelOutboxAckMatch[2] !== undefined) {
         const channel = channelOutboxAckMatch[1].toLowerCase() as OutboundChannel;
         const token = singleHeader(request.headers.authorization)?.replace(/^Bearer /, "") ?? "";
@@ -1984,7 +2134,7 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
             modelAccessBroker?.revokeJob(jobId);
             jobChannelNotifier.requestClearance(body.value as unknown as NodeToolCallV1, decision);
           }
-          json(response, decision.status === "APPROVED" ? 201 : decision.status === "WAIT_APPROVAL" ? 202 : 409, { decision });
+          json(response, decision.status === "WAIT_APPROVAL" ? 202 : 201, { decision });
         } catch (caught) {
           error(response, 409, "NODE_TOOL_REJECTED", caught instanceof Error ? caught.message : "Node tool call was rejected");
         }
@@ -2079,7 +2229,12 @@ export async function createFridayServer(config: FridayConfig, options: FridaySe
           error(response, 400, "INVALID_RUNNER_REVOKE_REQUEST", "Body must be an empty JSON object");
           return;
         }
-        const result = runnerRegistry.revokeDevice(runnerRevokeMatch[1].toLowerCase());
+        const runnerId = runnerRevokeMatch[1].toLowerCase();
+        if (runnerRegistry.isEnrolled(runnerId) && (jobRegistry.nonTerminalCountByRunner().get(runnerId) ?? 0) > 0) {
+          error(response, 409, "RUNNER_HAS_ACTIVE_JOBS", "该设备仍有未完成任务，请结束任务后再撤销纳管。");
+          return;
+        }
+        const result = runnerRegistry.revokeDevice(runnerId);
         if (result.outcome === "not_found") {
           error(response, 404, "RUNNER_DEVICE_NOT_FOUND", "No enrolled Runner device matches this id");
           return;

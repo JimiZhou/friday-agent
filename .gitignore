@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+runner-distribution/
 .friday/
 .playwright-cli/
 output/

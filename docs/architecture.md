@@ -83,7 +83,7 @@ flowchart LR
     Runner --> Sandbox["Sandbox + 独立 Worktree"]
     Sandbox --> Codex["Codex 0.145.0\nexec + Responses"]
     Sandbox --> Claude["Claude Code 2.1.227\nprint + Messages"]
-    Sandbox --> PiRPC["Pi 0.84.1\nJSON + Chat Completions"]
+    Sandbox --> PiRPC["Pi 1.3.0\nJSON + Chat Completions"]
 ```
 
 部署最小单元是一个 Hub、一个独立 Pi Worker 和至少一个 Runner。Web 静态资源可由 `fridayd` 直接提供；IM、语音、MCP、搜索和模型网关均为可停止、可替换的 Sidecar。MVP 不依赖 PostgreSQL、Redis、Kafka、Kubernetes 或插件市场。
@@ -112,7 +112,7 @@ M5 新增 `conversations_v1` 与 `conversation_turns_v1`。它们位于 Owner �
 
 ### 4.2 Pi Worker：固定版本的推理隔离层
 
-Pi Worker 以独立进程或容器运行固定版本的 [`earendil-works/pi`](https://github.com/earendil-works/pi) `pi --mode rpc`。M0 最初核验基线为 `v0.83.0`；当前部署 pin 已升级到 `@earendil-works/pi-coding-agent@0.84.1`，并通过真实 RPC smoke 与 0 漏洞 audit。实际发布仍必须固定包锁、运行时镜像和制品 SHA-256，而不是只记录标签。
+Pi Worker 以独立进程或容器运行固定版本的 [`earendil-works/pi`](https://github.com/earendil-works/pi) `pi --mode rpc`。M0 最初核验基线为 `v0.83.0`；当前部署 pin 已升级到 `@earendil-works/pi-coding-agent@1.3.0`，并通过真实 RPC smoke 与 0 漏洞 audit。实际发布仍必须固定包锁、运行时镜像和制品 SHA-256，而不是只记录标签。
 
 `fridayd` 不依赖 Pi 的内部 TypeScript API，只依赖 `PiWorkerAdapter`：
 

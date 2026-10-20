@@ -58,7 +58,9 @@ The Gateway accepts only that Owner's private chat and rejects groups, all other
 
 ## Enroll a managed node
 
-The machine running `fridayctl` needs Node.js `>=22.19.0`. A target node needs Linux/systemd, Node.js `>=22.19.0`, an existing service user, and root or non-interactive `sudo`.
+The shortest path is the paired private chat command `/runner add [device] [service user] [ssh target]`. With `FRIDAY_RUNNER_SSH_TARGET=hub-ssh` in the root-owned Hub `hub.env`, paste the returned single-line command directly on the target node. No `fridayctl`, source checkout, Owner Token, Tailscale network, or inbound port is required. The target must resolve that SSH destination, trust the Hub host key in `known_hosts`, and authenticate with a passwordless SSH key. The command installs a persistent outbound SSH tunnel to the Hub, downloads and verifies the Runner bundle, enrolls once, and starts the service.
+
+Alternatively, the machine running `fridayctl` needs Node.js `>=22.19.0`. A target node needs Linux/systemd, Node.js `>=22.19.0`, an existing service user, and root or non-interactive `sudo`. Build `fridayctl` from this repository only when you need operator-side preflight, upgrades, or Sandbox installation; it is not a prerequisite for the one-command route.
 
 ```sh
 npm ci --ignore-scripts
@@ -85,7 +87,7 @@ npm run fridayctl -- runner sandbox install node-user@managed-node.example-tailn
   --dry-run
 ```
 
-The image pins and validates `@openai/codex@0.145.0`, `@earendil-works/pi-coding-agent@0.84.1`, and `@anthropic-ai/claude-code@2.1.227`. Activation rolls back on failure. `fridayctl runner upgrade` preserves the existing device identity, Hub pin, and workspace registry.
+The image pins and validates `@openai/codex@0.145.0`, `@earendil-works/pi-coding-agent@1.3.0`, and `@anthropic-ai/claude-code@2.1.227`. Activation rolls back on failure. `fridayctl runner upgrade` preserves the existing device identity, Hub pin, and workspace registry.
 
 `node` is a local capability label for that managed node; its path only needs to be an existing controlled directory and does not need Git. Source workspaces sent to Codex, Pi, or Claude must still be Git repository roots. The Remote Agent plans with reusable structured tools, cannot claim completion before receiving a real node observation, and can treat an individual tool failure as evidence before re-planning. An R1-R3 call durably checkpoints the bounded observation history, notifies iLink/Telegram, and waits for exact Web clearance. If the lease expires first, Friday never executes the old call and instead asks the Agent to re-plan under a fresh lease.
 
@@ -95,7 +97,7 @@ This is supported with stricter prerequisites:
 
 - Keep the Hub on `127.0.0.1:4310` behind an existing private HTTPS reverse proxy. Do not map Friday's port directly to the public Internet.
 - Browsers and every Runner must reach the same valid HTTPS `FRIDAY_PUBLIC_ORIGIN`.
-- Provision SSH public keys and `known_hosts` before onboarding. `fridayctl` forces `BatchMode=yes`, `PasswordAuthentication=no`, and `KbdInteractiveAuthentication=no`; username/password SSH is unsupported.
+- For the one-command route, provision the target's SSH public key for the Hub account and trust the Hub host key in the target's `known_hosts`. The Hub never connects inbound to the target and never stores or enters SSH passwords. `fridayctl` adds the same key-only restrictions when used for operator-side installation.
 
 ```sh
 sudo ./deploy/hub/install-hub.sh \

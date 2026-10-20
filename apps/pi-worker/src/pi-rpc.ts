@@ -1,5 +1,5 @@
 /** Package version which must be installed in the immutable worker image. */
-export const PI_CODING_AGENT_VERSION = "0.84.1" as const;
+export const PI_CODING_AGENT_VERSION = "1.3.0" as const;
 
 export interface PiModelConfig {
   readonly baseUrl: URL;

@@ -28,6 +28,10 @@
         "web",
         "telegram",
         "wechat_ilink",
+        "feishu",
+        "wecom",
+        "qq",
+        "cmcc",
         "voice"
       ]
     },

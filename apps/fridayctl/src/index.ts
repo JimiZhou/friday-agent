@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { joinPlan, joinRunner, parseJoinArguments } from "./join.js";
+export { joinPlan, joinRunner, parseJoinArguments } from "./join.js";
 
 import { bootstrapPlan, bootstrapRunner, installSandboxd, parseBootstrapArguments, parseRunnerUpgradeArguments, parseSandboxInstallArguments, runnerUpgradePlan, sandboxInstallPlan, upgradeRunner } from "./bootstrap.js";
 
@@ -9,6 +11,12 @@ export type { BootstrapOptions, BootstrapResult, RunnerRelease, RunnerUpgradeOpt
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args[0] === "runner" && args[1] === "join") {
+    const options = parseJoinArguments(args);
+    const result = options.dryRun ? { dryRun: true, plan: joinPlan(options) } : await joinRunner(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return;
+  }
   if (args.includes("--help") || args.includes("-h")) throw new Error("Usage: fridayctl runner bootstrap ... | fridayctl runner upgrade ... | fridayctl runner sandbox install ...");
   if (args[0] === "runner" && args[1] === "sandbox" && args[2] === "install") {
     const options = parseSandboxInstallArguments(args);

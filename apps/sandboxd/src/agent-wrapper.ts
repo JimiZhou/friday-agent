@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 
 const execFile = promisify(execFileCallback);
 export const CODEX_CLI_VERSION = "0.145.0";
-export const PI_CLI_VERSION = "0.84.1";
+export const PI_CLI_VERSION = "1.3.0";
 export const CLAUDE_CLI_VERSION = "2.1.227";
 const RELAY_AUTHORITY = "friday-job-relay-only";
 

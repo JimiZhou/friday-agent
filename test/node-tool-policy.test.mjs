@@ -30,14 +30,15 @@ test("system snapshot follows the standard os-release symlink without widening f
   assert.equal(result.disk.arguments.includes("-l"), true);
 });
 
-test("Hub derives per-call risk, signs exact R0 authority, and pauses higher-risk calls", async (t) => {
+for (const unavailable of [false, true]) {
+test(`Hub derives per-call risk and avoids unavailable-tool approvals (unavailable=${unavailable})`, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "friday-node-tool-policy-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const database = join(directory, "friday.sqlite");
   const key = generateKeyPairSync("ed25519");
   const identity = { publicKeyPem: key.publicKey.export({ type: "spki", format: "pem" }).toString(), privateKeyPem: key.privateKey.export({ type: "pkcs8", format: "pem" }).toString() };
   const jobs = new SqliteJobRegistry(database, identity); jobs.open(); t.after(() => jobs.close());
-  const policy = new NodeToolPolicy(database, identity, jobs); policy.open(); t.after(() => policy.close());
+  const policy = new NodeToolPolicy(database, identity, jobs, unavailable ? ["service.restart"] : []); policy.open(); t.after(() => policy.close());
   const runnerId = randomUUID();
   const job = jobs.create({ idempotencyKey: randomUUID(), runnerId, workspaceId: "infra", tool: "agent", operation: "diagnose", prompt: "Inspect node" }).job;
   const spec = jobs.pull(runnerId); assert.ok(spec);
@@ -54,12 +55,24 @@ test("Hub derives per-call risk, signs exact R0 authority, and pauses higher-ris
 
   const restart = { ...snapshot, callId: randomUUID(), name: "service.restart", arguments: { unit: "friday-runner" }, reason: "Restart failed service", requestedAt: new Date().toISOString() };
   const pending = policy.evaluate(restart);
+  if (unavailable) {
+    assert.equal(pending.status, "DENIED");
+    assert.equal(pending.risk, "R2");
+    assert.match(pending.background, /not implemented/);
+    assert.equal(jobs.get(job.jobId).status, "RUNNING");
+    assert.equal(policy.listPending().length, 0);
+    assert.deepEqual(policy.evaluate(restart), pending);
+    assert.throws(() => policy.approve(restart.callId, "owner"), /not awaiting/);
+    assert.throws(() => policy.evaluate({ ...restart, arguments: { unit: "other" } }), /different content/);
+    return;
+  }
   assert.equal(pending.risk, "R2"); assert.equal(pending.status, "WAIT_APPROVAL"); assert.equal(jobs.get(job.jobId).status, "WAIT_APPROVAL");
   assert.equal(nodeToolRisk("file.delete"), "R3");
   const approved = policy.approve(restart.callId, "owner");
   assert.equal(approved.authorization.approvedBy, "owner"); assert.equal(jobs.get(job.jobId).status, "DISPATCHED");
   await assert.rejects(() => invokeAuthorizedNodeTool(restart, approved.authorization, identity.publicKeyPem), /not enabled/);
 });
+}
 
 test("an exact pending tool call can resume after the proposal freshness window", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "friday-node-tool-resume-"));

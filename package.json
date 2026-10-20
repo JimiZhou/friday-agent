@@ -32,8 +32,9 @@
     "release:check": "npm test && npm audit --audit-level=moderate && sh -n deploy/hub/install-hub.sh && sh -n deploy/hub/configure-telegram.sh && sh -n deploy/runner/install-managed-runner.sh && sh -n deploy/runner/upgrade-managed-runner.sh && sh -n deploy/sandboxd/install-managed-sandboxd.sh && bash scripts/public-release-check.sh"
   },
   "devDependencies": {
-    "@types/qrcode": "1.5.5",
     "@types/node": "22.15.30",
+    "@types/qrcode": "1.5.5",
+    "@types/ws": "8.18.2",
     "ajv": "8.20.0",
     "typescript": "5.9.3"
   }

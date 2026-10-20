@@ -125,6 +125,7 @@ test("fridayctl release contains a runnable compiled Runner and no TypeScript so
   assert.match(listing, /release\/packages\/protocol\/dist\/index\.js/);
   assert.doesNotMatch(listing, /\/src\//);
   assert.doesNotMatch(listing, /\/\._/);
+  await createRunnerRelease(repository, directory);
 
   const extracted = join(directory, "extracted");
   const state = join(directory, "state");
@@ -179,6 +180,7 @@ test("fridayctl builds a digestable Sandbox release with the pinned Agent runtim
   const directory = await mkdtemp(join(tmpdir(), "fridayctl-sandbox-release-test-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const release = await createSandboxdRelease(repository, directory);
+  await createSandboxdRelease(repository, directory);
   const listing = (await execFile("tar", ["-tzf", release.archive])).stdout;
   assert.match(listing, /release\/apps\/sandboxd\/dist\/index\.js/);
   assert.match(listing, /release\/apps\/sandboxd\/dist\/agent-wrapper\.js/);

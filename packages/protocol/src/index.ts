@@ -33,7 +33,17 @@ export type InboundChannelV1 =
   | "web"
   | "telegram"
   | "wechat_ilink"
+  | "feishu"
+  | "wecom"
+  | "qq"
+  | "cmcc"
   | "voice";
+
+export const PRIVATE_CHANNELS = ["telegram", "wechat_ilink", "feishu", "wecom", "qq", "cmcc"] as const;
+export type PrivateChannelV1 = typeof PRIVATE_CHANNELS[number];
+export function isPrivateChannel(value: unknown): value is PrivateChannelV1 {
+  return typeof value === "string" && (PRIVATE_CHANNELS as readonly string[]).includes(value);
+}
 
 export type AuthStrengthV1 = "unverified" | "channel" | "strong";
 
@@ -283,6 +293,21 @@ export type JobStateV1 =
   | "FAILED"
   | "CANCELLED";
 
+export interface RunnerSystemInfoV1 {
+  observedAt: string;
+  osName: string;
+  osScope: "host" | "runner";
+  kernel: string;
+  arch: string;
+  cpuModel: string;
+  cpuThreads: number;
+  memoryBytes: number;
+  runtime: "host" | "container";
+  storageScope: "runner-state";
+  storageTotalBytes?: number;
+  storageAvailableBytes?: number;
+}
+
 export interface RunnerRegisterPayloadV1 {
   displayName: string;
   version: string;
@@ -290,6 +315,7 @@ export interface RunnerRegisterPayloadV1 {
   workspaces: readonly string[];
   /** The v1 skeleton advertises orchestration only and cannot execute a shell. */
   shellExecution: false;
+  systemInfo?: RunnerSystemInfoV1;
 }
 
 export interface RunnerHeartbeatPayloadV1 {

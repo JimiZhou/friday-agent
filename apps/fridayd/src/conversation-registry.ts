@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { isPrivateChannel, type PrivateChannelV1 } from "@friday/protocol";
 
 import type { JobToolV2 } from "@friday/protocol";
 import type { ConversationMedia } from "./conversation-media.js";
@@ -9,7 +10,7 @@ const CONVERSATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_TEXT_BYTES = 32 * 1024;
 
-export type ConversationChannel = "web" | "telegram" | "wechat_ilink" | "voice";
+export type ConversationChannel = "web" | PrivateChannelV1 | "voice";
 export type ConversationTurnStatus = "QUEUED" | "THINKING" | "REPLIED" | "JOB_PROPOSED" | "FAILED";
 
 export interface ConversationJobProposal {
@@ -549,7 +550,7 @@ function requireBoundedText(value: string, name: string, maximumBytes: number): 
 }
 
 function isChannel(value: unknown): value is ConversationChannel {
-  return value === "web" || value === "telegram" || value === "wechat_ilink" || value === "voice";
+  return value === "web" || isPrivateChannel(value) || value === "voice";
 }
 
 function isTurnStatus(value: unknown): value is ConversationTurnStatus {

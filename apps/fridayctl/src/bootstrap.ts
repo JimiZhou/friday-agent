@@ -234,6 +234,8 @@ export async function createRunnerRelease(repoRoot: string, outputDirectory: str
   await cp(join(root, "apps", "runner", "package.json"), join(releaseRoot, "apps", "runner", "package.json"));
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "runner", "friday-runner-managed@.service"), join(releaseRoot, "friday-runner-managed@.service"));
+  await cp(join(root, "deploy", "runner", "install-standalone.mjs"), join(releaseRoot, "install-standalone.mjs"));
+  await rm(join(releaseRoot, "node_modules", "@friday", "protocol"), { recursive: true, force: true });
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
   await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-runner", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   await normalizeDirectoryModes(releaseRoot);
@@ -265,6 +267,7 @@ export async function createSandboxdRelease(repoRoot: string, outputDirectory: s
   await cp(join(root, "packages", "protocol", "package.json"), join(releaseRoot, "packages", "protocol", "package.json"));
   await cp(join(root, "deploy", "sandboxd", "agent"), join(releaseRoot, "agent"), { recursive: true });
   await cp(join(root, "deploy", "sandboxd", "friday-sandboxd.service"), join(releaseRoot, "friday-sandboxd.service"));
+  await rm(join(releaseRoot, "node_modules", "@friday", "protocol"), { recursive: true, force: true });
   await symlink("../../packages/protocol", join(releaseRoot, "node_modules", "@friday", "protocol"));
   await writeFile(join(releaseRoot, "RELEASE.json"), `${JSON.stringify({ product: "friday-sandboxd", version: "0.2.1", node: ">=22.19.0" }, null, 2)}\n`, { mode: 0o644 });
   await normalizeDirectoryModes(releaseRoot);

@@ -388,7 +388,7 @@ test("FRIDAY_PI_BIN launches a bounded Pi RPC bridge only with complete private 
     fakePi,
     [
       "#!/usr/bin/env node",
-      "if (process.argv.includes('--version')) { if (!process.env.HOME) process.exit(2); process.stdout.write('0.84.1\\n'); process.exit(0); }",
+      "if (process.argv.includes('--version')) { if (!process.env.HOME) process.exit(2); process.stdout.write('1.3.0\\n'); process.exit(0); }",
       "let buffer = '';",
       "process.stdin.setEncoding('utf8');",
       "process.stdin.on('data', chunk => { buffer += chunk; let index; while ((index = buffer.indexOf('\\n')) >= 0) { const line = buffer.slice(0, index); buffer = buffer.slice(index + 1); if (!line) continue; const command = JSON.parse(line); process.stdout.write(JSON.stringify({ type: 'response', id: command.id, command: command.type, success: true, data: { args: process.argv.slice(2), inheritedHubSecret: process.env.FRIDAY_TEST_HUB_SECRET ?? null, receivedImages: command.images ?? null } }) + '\\n'); } });",
